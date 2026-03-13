@@ -8,4 +8,4 @@ This document maintains a curated list of academic papers, datasets, and technic
 
 ### 2. [Deep Packet: A Novel Approach For Encrypted Traffic Classification Using Deep Learning](https://arxiv.org/abs/1709.02656?fbclid=IwY2xjawQfzRBleHRuA2FlbQIxMABicmlkETB2TFpTSk5xd0JacHc4T0tFc3J0YwZhcHBfaWQQMjIyMDM5MTc4ODIwMDg5MgABHtdI3g0HQqTuV6gK-n2Y95OMlhlO3fKP2l50zHHHcmPzrU4Ti7_a5TkbX6ot_aem_QW_a2LWpQDcQ8dhx2Do1kw)
 
-### 3. [Scapy’s documentatio](https://scapy.readthedocs.io/en/latest/?fbclid=IwY2xjawQfzZFleHRuA2FlbQIxMABicmlkETB2TFpTSk5xd0JacHc4T0tFc3J0YwZhcHBfaWQQMjIyMDM5MTc4ODIwMDg5MgABHv4dBgPe0KvZx2jRZVuA0utrByzK37Bom5mAMDSFY6oc49iDKLvH1HOD1lz__aem_UraM5bh6dxUnTR7wugQAKg)
+### 3. [Scapy’s documentation](https://scapy.readthedocs.io/en/latest/?fbclid=IwY2xjawQfzZFleHRuA2FlbQIxMABicmlkETB2TFpTSk5xd0JacHc4T0tFc3J0YwZhcHBfaWQQMjIyMDM5MTc4ODIwMDg5MgABHv4dBgPe0KvZx2jRZVuA0utrByzK37Bom5mAMDSFY6oc49iDKLvH1HOD1lz__aem_UraM5bh6dxUnTR7wugQAKg)
