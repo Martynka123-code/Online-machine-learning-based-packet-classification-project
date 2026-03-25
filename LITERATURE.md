@@ -13,3 +13,9 @@ This document maintains a curated list of academic papers, datasets, and technic
 ### 4. [Enhanced Network Traffic Classification with Machine Learning Algorithms](https://dl.acm.org/doi/abs/10.1145/3660853.3660935?casa_token=Rny-lNv6ZrAAAAAA:TRM26GlVdC_dwFnUDO83Zi9YNTtCg296oo6b8PTCakjL6g2-sAvn-nVP-4CvG9AQMWJap1MuWpcxDg)
 
 ### 5. [Encrypted Traffic Classification at Line Rate in Programmable Switches with Machine Learning](https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=10575394&tag=1)
+
+### 6. [A review on machine learning–based approaches for Internet traffic classification](https://link.springer.com/article/10.1007/s12243-020-00770-7?fbclid=IwY2xjawQw7oFleHRuA2FlbQIxMABicmlkETB2TFpTSk5xd0JacHc4T0tFc3J0YwZhcHBfaWQQMjIyMDM5MTc4ODIwMDg5MgABHvz5Z9Fj7t7hpVTWDX_LI4JUdSDX6TirxQgkeklifv5l7IUxN4wqRz-n-QeC_aem_EEDyFFvHjCyWs-dSOPYMjw)
+
+## Datasets (backup)
+
+### 1. [Traffic dataset USTC-TFC2016](https://github.com/davidyslu/USTC-TFC2016)
