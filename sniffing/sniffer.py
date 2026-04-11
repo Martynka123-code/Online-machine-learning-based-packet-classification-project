@@ -1,6 +1,7 @@
 from scapy.all import sniff, PcapWriter
 import os
 from datetime import datetime
+from scapy.layers.inet import IP
 
 INTERFACE = None
 DIR_FOR_SAVING = "traffic_logs"
@@ -30,6 +31,9 @@ class Sniffer:
         try:
             if self.packet_count % CHECK_INTERVAL == 0:
                 self.get_file_name()
+
+            if IP in packet:
+                packet = packet[IP]
             
             self.packet_count += 1
             self.writer.write(packet)
