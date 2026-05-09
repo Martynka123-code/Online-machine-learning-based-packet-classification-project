@@ -6,11 +6,11 @@ from scapy.all import rdpcap
 from scapy.layers.inet import IP, TCP, UDP
 import warnings
 
-warnings.filterwarnings('ignore')  # Ukrywa ostrzeżenia Scapy
+warnings.filterwarnings('ignore')  # Suppress Scapy's warnings
 
 
 class FlowFeatureExtractor:
-    def __init__(self, pcap_path, label, granularity=100):
+    def __init__(self, pcap_path, label, granularity = 100):
         self.pcap_path = pcap_path
         self.label = label
         self.granularity = granularity
@@ -18,7 +18,8 @@ class FlowFeatureExtractor:
         self.dataset = []
 
     def _get_flow_key(self, packet):
-        """Zwraca zanonimizowany klucz przepływu (5-tuple), ignorując kierunek."""
+        """Returns a direction-agnostic 5-tuple flow key (src_ip, dst_ip, src_port, dst_port, proto).
+        Sorting IPs and ports ensures the same key regardless of packet direction."""
         if not packet.haslayer(IP): return None
         ip_layer = packet[IP]
         proto = ip_layer.proto
@@ -34,6 +35,7 @@ class FlowFeatureExtractor:
         return (ips[0], ips[1], ports[0], ports[1], proto)
 
     def _get_payload_length(self, packet):
+        """Returns the payload length in bytes."""
         if packet.haslayer(TCP) and packet[TCP].payload:
             return len(packet[TCP].payload)
         elif packet.haslayer(UDP) and packet[UDP].payload:
@@ -41,7 +43,8 @@ class FlowFeatureExtractor:
         return 0
 
     def _calculate_features(self, packets):
-        """Wylicza zdefiniowane cechy z agregatu, MASKUJĄC adresy IP/MAC."""
+        """Compute statistical features from a fixed-size packet window.
+        IP and MAC addresses are not included to keep the feature set anonymous."""
         pkt_lengths = [len(p) for p in packets]
         payload_lengths = [self._get_payload_length(p) for p in packets]
         iats = [float(packets[i].time - packets[i - 1].time) for i in range(1, len(packets))]
@@ -68,7 +71,8 @@ class FlowFeatureExtractor:
         return features
 
     def process_and_save(self, output_csv):
-        print(f"[*] Ekstrakcja cech z: {self.pcap_path} | Granularność: {self.granularity}")
+        """Extracts features from a pcap file and append results to a csv file."""
+        print(f"[*] Extracting features from: {self.pcap_path} | Granularity: {self.granularity}")
         packets = rdpcap(self.pcap_path)
 
         for pkt in packets:
@@ -80,13 +84,13 @@ class FlowFeatureExtractor:
 
             if len(self.flows[flow_key]) == self.granularity:
                 self.dataset.append(self._calculate_features(self.flows[flow_key]))
-                self.flows[flow_key] = []  # Reset agregatu
+                self.flows[flow_key] = []  # Reset window for the next aggregate.
 
         if not self.dataset:
-            print("[!] Brak wystarczającej liczby pakietów do stworzenia agregatu.")
+            print("[!] No enough number of packets to set a single aggregate.")
             return
 
         df = pd.DataFrame(self.dataset).round(5)
         file_exists = os.path.isfile(output_csv)
         df.to_csv(output_csv, mode='a', header=not file_exists, index=False)
-        print(f"[+] Zapisano {len(self.dataset)} agregatów do {output_csv}")
+        print(f"[+] Saved {len(self.dataset)} aggregates to {output_csv}")
