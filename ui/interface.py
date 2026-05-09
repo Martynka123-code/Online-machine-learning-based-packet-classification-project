@@ -2,4 +2,4 @@ class UIInterface:
     def __init__(self):
         pass
     def launch(self):
-        print("Uruchamianie okienka (PyQt / Tkinter)")
+        print("Starting a window (PyQt / Tkinter)")
