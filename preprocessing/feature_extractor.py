@@ -43,7 +43,7 @@ class FlowFeatureExtractor:
         return 0
 
     def _calculate_features(self, packets):
-        """Compute statistical features from a fixed-size packet window.
+        """Computes statistical features from a fixed-size packet window.
         IP and MAC addresses are not included to keep the feature set anonymous."""
         pkt_lengths = [len(p) for p in packets]
         payload_lengths = [self._get_payload_length(p) for p in packets]
