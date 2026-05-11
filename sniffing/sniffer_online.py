@@ -15,17 +15,15 @@ class SnifferOnline:
         self.callback(packet)
 
     def start_capture(self):
-        print(f"[*] Starting online capture on interface: {self.interface or 'default'}...")
+        print(f"[*] Starting online capture on interface: {self.interface or 'default'}")
         print("[*] Press Ctrl+C to stop.")
         sniff(
-            iface=self.interface, 
-            filter="ip", 
-            prn=self._packet_handler, 
-            store=False, 
-            timeout=1.0, 
+            iface=self.interface,
+            filter="ip",
+            prn=self._packet_handler,
+            store=False,
             stop_filter=lambda x: self.stop_sniffing
         )
-
     def stop_capture(self):
         self.stop_sniffing = True
         print("[*] Capture stopped.")
