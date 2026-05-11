@@ -13,7 +13,7 @@ from preprocessing.feature_extractor import FlowFeatureExtractor
 from models.rf_trainer import RandomForestTrainer
 from models.rf_online import RandomForestOnline
 from visualization.rf_visualizer import plot_granularity_comparison
-from utils.filesystem import list_files  # Ensure you copied this from test2
+
 
 def menu_collect_data():
     """Option 1: Collect raw traffic using the process-to-port sniffer."""

@@ -109,8 +109,7 @@ class RandomForestTrainer:
 
         cv_model = RandomForestClassifier(n_estimators=100, class_weight=cw_dict, random_state=42)
         cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-        cv_res = cross_validate(cv_model, X, y, cv=cv, scoring=["accuracy", "f1_weighted"])
-
+        cv_res = cross_validate(cv_model, X, y, cv=cv, scoring=["accuracy", "f1_weighted", "f1_macro"])
         self.model = RandomForestClassifier(n_estimators=100, class_weight=cw_dict, random_state=42)
         self.model.fit(X_train, y_train)
 
