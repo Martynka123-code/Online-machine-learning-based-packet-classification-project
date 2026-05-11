@@ -8,12 +8,9 @@ import warnings
 
 warnings.filterwarnings('ignore')  # Suppress Scapy's warnings
 
+
 class FlowFeatureExtractor:
-    def __init__(self, pcap_path=None, label=None, granularity=100):
-        """
-        pcap_path: Path to the .pcap file (None for Online mode)
-        label: Traffic class label (None for Online mode)
-        """
+    def __init__(self, pcap_path, label, granularity = 100):
         self.pcap_path = pcap_path
         self.label = label
         self.granularity = granularity
@@ -68,21 +65,13 @@ class FlowFeatureExtractor:
             "iat_p95_minus_p50": np.percentile(iats, 95) - np.median(iats),
             "iat_cov_std_mean": iat_cov,
             "iat_median": np.median(iats),
-            "granularity": self.granularity
+            "granularity": self.granularity,
+            "label": self.label
         }
-        
-        # Add label only if we are in training/extraction mode
-        if self.label is not None:
-            features["label"] = self.label
-            
         return features
 
     def process_and_save(self, output_csv):
         """Extracts features from a pcap file and append results to a csv file."""
-        if self.pcap_path is None:
-            print("[!] Error: No PCAP path provided. This method is for offline extraction.")
-            return
-
         print(f"[*] Extracting features from: {self.pcap_path} | Granularity: {self.granularity}")
         packets = rdpcap(self.pcap_path)
 
@@ -98,7 +87,7 @@ class FlowFeatureExtractor:
                 self.flows[flow_key] = []  # Reset window for the next aggregate.
 
         if not self.dataset:
-            print("[!] Not enough packets to create a single aggregate.")
+            print("[!] No enough number of packets to set a single aggregate.")
             return
 
         df = pd.DataFrame(self.dataset).round(5)
