@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+import queue
 from scapy.all import sniff 
 from config import DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
 
@@ -54,8 +55,6 @@ def menu_train_models():
     if results:
         plot_granularity_comparison(results)
 
-import threading
-
 def menu_online_mode():
     """Option 4: Live classification pipeline with asynchronous buffering."""
     print(f"\nAvailable granularities: {GRANULARITIES}")
@@ -75,16 +74,15 @@ def menu_online_mode():
     
     def packet_processor():
         print("[*] Worker thread started: waiting for packets in buffer...")
-        packets_processed_count = 0
         FLOW_TIMEOUT = 120.0 
         
         while True:
-            packet = sniffer.packet_queue.get() 
-            
-            if packet is None:
-                break
-                
             try:
+                packet = sniffer.packet_queue.get(timeout=1.0) 
+                
+                if packet is None:
+                    break
+                    
                 key = extractor._get_flow_key(packet)
                 if key is None:
                     continue
@@ -102,19 +100,16 @@ def menu_online_mode():
                     prediction = classifier.classify_stream(features)
                     print(f"[LIVE] Flow {key[4]}: {key[0]} <-> {key[1]} | Ports: {key[2]} <-> {key[3]} | App: {prediction}")
 
-                packets_processed_count += 1
-                if packets_processed_count % 1000 == 0:
-                    current_time = time.time()
-                    stale_keys = [k for k, v in active_flows.items() if current_time - v["last_seen"] > FLOW_TIMEOUT]
-                    for k in stale_keys:
-                        del active_flows[k]
+                sniffer.packet_queue.task_done()
+
+            except queue.Empty:
+                current_time = time.time()
+                stale_keys = [k for k, v in active_flows.items() if current_time - v["last_seen"] > FLOW_TIMEOUT]
+                for k in stale_keys:
+                    del active_flows[k]
 
             except Exception as e:
                 print(f"[ERROR in processor] {type(e).__name__}: {e}")
-                
-            finally:
-                sniffer.packet_queue.task_done()
-
 
     print(f"[*] Loaded Random Forest model from: {model_path}")
     

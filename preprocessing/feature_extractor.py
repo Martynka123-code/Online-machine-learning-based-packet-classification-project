@@ -77,8 +77,8 @@ class FlowFeatureExtractor:
             
         return features
 
-    def process_and_save(self, output_csv):
-        """Extracts features from a pcap file and append results to a csv file."""
+    def process_and_save(self, output_csv, batch_size=10000):
+        """Extracts features from a pcap file and appends results to a csv file using batches to save RAM."""
         if self.pcap_path is None:
             print("[!] Error: No PCAP path provided. This method is for offline extraction.")
             return
@@ -95,13 +95,20 @@ class FlowFeatureExtractor:
 
             if len(self.flows[flow_key]) == self.granularity:
                 self.dataset.append(self._calculate_features(self.flows[flow_key]))
-                self.flows[flow_key] = []  # Reset window for the next aggregate.
+                self.flows[flow_key] = []  
 
-        if not self.dataset:
+                if len(self.dataset) >= batch_size:
+                    self._save_batch(output_csv)
+
+        if self.dataset:
+            self._save_batch(output_csv)
+        else:
             print("[!] Not enough packets to create a single aggregate.")
-            return
 
+    def _save_batch(self, output_csv):
+        """Helper function to save a batch and clear memory."""
         df = pd.DataFrame(self.dataset).round(5)
         file_exists = os.path.isfile(output_csv)
         df.to_csv(output_csv, mode='a', header=not file_exists, index=False)
-        print(f"[+] Saved {len(self.dataset)} aggregates to {output_csv}")
+        print(f"[+] Saved batch of {len(self.dataset)} aggregates to {output_csv}")
+        self.dataset.clear()  
