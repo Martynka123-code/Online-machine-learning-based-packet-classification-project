@@ -2,18 +2,22 @@ import os
 import time
 import threading
 import queue
+import sys
 from scapy.all import sniff 
-from config import DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
 
+# Import configuration and custom modules
+from config import DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
 from sniffing.sniffer_training import SnifferTraining
 from sniffing.sniffer_online import SnifferOnline
 from preprocessing.feature_extractor import FlowFeatureExtractor
 from models.rf_trainer import RandomForestTrainer
 from models.rf_online import RandomForestOnline
 from visualization.rf_visualizer import plot_granularity_comparison
+from utils.filesystem import list_files  # Ensure you copied this from test2
 
 def menu_collect_data():
-    """Option 1: Collect raw traffic using the advanced process-to-port sniffer."""
+    """Option 1: Collect raw traffic using the process-to-port sniffer."""
+    print("\n--- Data Collection Mode ---")
     app_name = input("Enter application name to monitor (e.g., spotify): ").strip().lower()
     if not app_name: return
     
@@ -21,18 +25,23 @@ def menu_collect_data():
     sniffer.start()
 
 def menu_extract_features():
-    """Option 2: Convert PCAP files to CSV datasets."""
+    """Option 2: Convert PCAP files to CSV datasets for multiple granularities."""
+    print("\n--- Feature Extraction (PCAP to CSV) ---")
     files = [f for f in os.listdir(DATA_RAW_DIR) if f.endswith('.pcap')]
     if not files:
         print(f"[!] No PCAP files found in {DATA_RAW_DIR}")
         return
 
-    print("\nAvailable files:")
+    print("\nAvailable PCAP files:")
     for f in files: print(f"  - {f}")
     
     pcap_file = input("\nEnter filename to process: ").strip()
     label = input("Enter traffic label (e.g., Spotify): ").strip()
     pcap_path = os.path.join(DATA_RAW_DIR, pcap_file)
+
+    if not os.path.exists(pcap_path):
+        print("[!] File not found.")
+        return
 
     print(f"[*] Extracting features for granularities: {GRANULARITIES}")
     for gran in GRANULARITIES:
@@ -40,52 +49,73 @@ def menu_extract_features():
         extractor = FlowFeatureExtractor(pcap_path, label, granularity=gran)
         extractor.process_and_save(output_csv)
 
+def menu_validate_datasets():
+    """Option 3: Quality check for generated CSV datasets (from test2)."""
+    print("\n--- Feature Validation Report ---")
+    csv_files = [f for f in os.listdir(DATA_CSV_DIR) if f.endswith('.csv')]
+    if not csv_files:
+        print("[!] No CSV datasets found. Run extraction first.")
+        return
+
+    for csv_file in csv_files:
+        path = os.path.join(DATA_CSV_DIR, csv_file)
+        print(f"\nValidating: {csv_file}")
+        trainer = RandomForestTrainer(path)
+        trainer.validate_features()
+
 def menu_train_models():
-    """Option 3: Train Random Forest models and generate reports."""
+    """Option 4: Train RF models with advanced analytics and visualization."""
+    print("\n--- Model Training & Advanced Analytics ---")
     results = {}
+    
     for gran in GRANULARITIES:
         csv_path = os.path.join(DATA_CSV_DIR, f"rf_dataset_{gran}.csv")
         if os.path.exists(csv_path):
-            trainer = RandomForestTrainer(csv_path)
+            print(f"\n>>> Training for Granularity: {gran} packets")
+            # The new RandomForestTrainer will auto-generate plots during train_and_evaluate()
+            trainer = RandomForestTrainer(csv_path, reports_dir="reports")
             acc = trainer.train_and_evaluate()
+            
             if acc:
                 results[gran] = acc
-                trainer.save_model(os.path.join(MODELS_DIR, f"rf_model_{gran}.pkl"))
+                model_path = os.path.join(MODELS_DIR, f"rf_model_{gran}.pkl")
+                trainer.save_model(model_path)
     
     if results:
+        print("\n--- Training Summary ---")
+        for g, a in sorted(results.items()):
+            print(f"Granularity {g:3}: Accuracy {a:.2%}")
         plot_granularity_comparison(results)
 
 def menu_online_mode():
-    """Option 4: Live classification pipeline with asynchronous buffering."""
-    print(f"\nAvailable granularities: {GRANULARITIES}")
+    """Option 5: Live classification with asynchronous packet processing buffer."""
+    print("\n--- Online Classification (Real-time) ---")
+    print(f"Available granularities: {GRANULARITIES}")
     choice = input(f"Select granularity (default {GRANULARITIES[0]}): ").strip()
     gran = int(choice) if choice else GRANULARITIES[0]
 
     model_path = os.path.join(MODELS_DIR, f"rf_model_{gran}.pkl")
     if not os.path.exists(model_path):
-        print("[!] Model file not found. Train it first.")
+        print("[!] Model not found. Train it first.")
         return
 
     classifier = RandomForestOnline(model_path)
     extractor = FlowFeatureExtractor(None, None, granularity=gran)
-    
     sniffer = SnifferOnline()
     active_flows = {}
     
     def packet_processor():
-        print("[*] Worker thread started: waiting for packets in buffer...")
+        """Background worker thread to handle packet buffering and classification."""
+        print("[*] Worker thread started: processing packets...")
         FLOW_TIMEOUT = 120.0 
         
         while True:
             try:
                 packet = sniffer.packet_queue.get(timeout=1.0) 
-                
-                if packet is None:
-                    break
+                if packet is None: break
                     
                 key = extractor._get_flow_key(packet)
-                if key is None:
-                    continue
+                if key is None: continue
 
                 if key not in active_flows:
                     active_flows[key] = {"packets": [], "last_seen": time.time()}
@@ -93,54 +123,58 @@ def menu_online_mode():
                 active_flows[key]["packets"].append(packet)
                 active_flows[key]["last_seen"] = time.time()
 
+                # If flow reached required packet window size, classify it
                 if len(active_flows[key]["packets"]) >= gran:
                     features = extractor._calculate_features(active_flows[key]["packets"][:gran])
                     del active_flows[key] 
 
                     prediction = classifier.classify_stream(features)
-                    print(f"[LIVE] Flow {key[4]}: {key[0]} <-> {key[1]} | Ports: {key[2]} <-> {key[3]} | App: {prediction}")
+                    print(f"[LIVE] Flow {key[4]}: {key[0]} <-> {key[1]} | App: {prediction}")
 
                 sniffer.packet_queue.task_done()
 
             except queue.Empty:
+                # Cleanup stale flows that haven't seen packets for a while
                 current_time = time.time()
                 stale_keys = [k for k, v in active_flows.items() if current_time - v["last_seen"] > FLOW_TIMEOUT]
-                for k in stale_keys:
-                    del active_flows[k]
-
+                for k in stale_keys: del active_flows[k]
             except Exception as e:
-                print(f"[ERROR in processor] {type(e).__name__}: {e}")
+                print(f"[ERROR] {e}")
 
-    print(f"[*] Loaded Random Forest model from: {model_path}")
-    
+    print(f"[*] Loaded model: {model_path}")
     processor_thread = threading.Thread(target=packet_processor, daemon=True)
     processor_thread.start()
 
-    print("[*] Press Ctrl+C to stop.")
     try:
         sniffer.start_capture()
     except KeyboardInterrupt:
-        print("\n[*] Stopping capture and returning to menu...")
+        print("\n[*] Stopping capture...")
         sniffer.stop_capture()
         processor_thread.join(timeout=1.0)
 
 def main():
+    """Main application loop."""
     while True:
-        print("\n" + "="*50)
-        print(" NETWORK CLASSIFIER SYSTEM ")
-        print("="*50)
-        print(" 1. Collect Training Data (Advanced Sniffer)")
+        print("\n" + "="*55)
+        print(" NETWORK TRAFFIC CLASSIFIER - INTEGRATED SYSTEM ")
+        print("="*55)
+        print(" 1. Collect Training Data (Sniffer)")
         print(" 2. Extract Features (PCAP to CSV)")
-        print(" 3. Train Models (Random Forest)")
-        print(" 4. Run Online Classification")
+        print(" 3. Validate Datasets (Quality Report)")
+        print(" 4. Train Models & Analytics (RF)")
+        print(" 5. Run Online Classification (Live)")
         print(" 0. Exit")
         
         cmd = input("\nSelect option: ").strip()
         if cmd == '1': menu_collect_data()
         elif cmd == '2': menu_extract_features()
-        elif cmd == '3': menu_train_models()
-        elif cmd == '4': menu_online_mode()
+        elif cmd == '3': menu_validate_datasets()
+        elif cmd == '4': menu_train_models()
+        elif cmd == '5': menu_online_mode()
         elif cmd == '0': break
 
 if __name__ == "__main__":
+    # Ensure necessary directories exist
+    for d in [DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, "reports"]:
+        os.makedirs(d, exist_ok=True)
     main()
