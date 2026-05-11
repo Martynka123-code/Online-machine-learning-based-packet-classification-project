@@ -1,22 +1,18 @@
+import queue
 from scapy.all import sniff
 
 class SnifferOnline:
-    def __init__(self, callback_function, interface=None):
-        """
-        callback_function: function to which the sniffer will send each captured packet.
-        interface: optional network interface name (e.g., 'eth0', 'Wi-Fi').
-        """
-        self.callback = callback_function
+    def __init__(self, interface=None):
         self.interface = interface
         self.stop_sniffing = False
+        self.packet_queue = queue.Queue() 
 
     def _packet_handler(self, packet):
-        # Forward the packet directly to the processing pipeline
-        self.callback(packet)
+        self.packet_queue.put(packet)
 
     def start_capture(self):
         print(f"[*] Starting online capture on interface: {self.interface or 'default'}")
-        print("[*] Press Ctrl+C to stop.")
+        print("[*] Packets are being buffered asynchronously.")
         sniff(
             iface=self.interface,
             filter="ip",
@@ -24,6 +20,8 @@ class SnifferOnline:
             store=False,
             stop_filter=lambda x: self.stop_sniffing
         )
+        
     def stop_capture(self):
         self.stop_sniffing = True
+        self.packet_queue.put(None)
         print("[*] Capture stopped.")

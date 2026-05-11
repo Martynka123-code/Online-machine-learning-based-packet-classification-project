@@ -1,10 +1,8 @@
-# main.py
 import os
-import sys
 import threading
+from scapy.all import sniff 
 from config import DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
 
-# Imports from your modules
 from sniffing.sniffer_training import SnifferTraining
 from sniffing.sniffer_online import SnifferOnline
 from preprocessing.feature_extractor import FlowFeatureExtractor
@@ -55,8 +53,10 @@ def menu_train_models():
     if results:
         plot_granularity_comparison(results)
 
+import threading
+
 def menu_online_mode():
-    """Option 4: Live classification pipeline."""
+    """Option 4: Live classification pipeline with asynchronous buffering."""
     print(f"\nAvailable granularities: {GRANULARITIES}")
     choice = input(f"Select granularity (default {GRANULARITIES[0]}): ").strip()
     gran = int(choice) if choice else GRANULARITIES[0]
@@ -68,34 +68,53 @@ def menu_online_mode():
 
     classifier = RandomForestOnline(model_path)
     extractor = FlowFeatureExtractor(None, None, granularity=gran)
+    
+    sniffer = SnifferOnline()
     active_flows = {}
-    flow_lock = threading.Lock()
+    
+    def packet_processor():
+        print("[*] Worker thread started: waiting for packets in buffer...")
+        while True:
+            packet = sniffer.packet_queue.get() 
+            
+            if packet is None:
+                break
+                
+            try:
+                key = extractor._get_flow_key(packet)
+                if key is None:
+                    continue
+
+                if key not in active_flows:
+                    active_flows[key] = []
+                active_flows[key].append(packet)
+
+                if len(active_flows[key]) >= gran:
+                    features = extractor._calculate_features(active_flows[key][:gran])
+                    del active_flows[key] 
+
+                    prediction = classifier.classify_stream(features)
+                    print(f"[LIVE] Flow: {key[0]}:{key[2]} <-> {key[1]}:{key[3]} | App: {prediction}")
+
+            except Exception as e:
+                print(f"[ERROR in processor] {type(e).__name__}: {e}")
+                
+            finally:
+                sniffer.packet_queue.task_done()
 
 
-def packet_callback(packet):
+    print(f"[*] Loaded Random Forest model from: {model_path}")
+    
+    processor_thread = threading.Thread(target=packet_processor, daemon=True)
+    processor_thread.start()
+
+    print("[*] Press Ctrl+C to stop.")
     try:
-        key = extractor._get_flow_key(packet)
-        if key is None:
-            return
-
-        features = None
-
-        with flow_lock:
-            if key not in active_flows:
-                active_flows[key] = []
-            active_flows[key].append(packet)
-
-            if len(active_flows[key]) >= gran:
-                features = extractor._calculate_features(active_flows[key][:gran])
-                del active_flows[key]
-
-        if features is not None:
-            prediction = classifier.classify_stream(features)
-            print(f"[LIVE] Flow: {key[0]}:{key[2]} <-> {key[1]}:{key[3]} | App: {prediction}")
-
-    except Exception as e:
-        print(f"[ERROR in callback] {type(e).__name__}: {e}")  # ← pokaż ten output
-
+        sniffer.start_capture()
+    except KeyboardInterrupt:
+        print("\n[*] Stopping capture and returning to menu...")
+        sniffer.stop_capture()
+        processor_thread.join(timeout=1.0)
 
 def main():
     while True:
