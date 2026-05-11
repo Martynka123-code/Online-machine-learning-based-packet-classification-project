@@ -1,4 +1,3 @@
-# sniffing/sniffer_training.py
 import csv
 import json
 import os
@@ -106,7 +105,6 @@ class SnifferTraining:
                 filter="ip",
                 prn=self._handle_packet,
                 store=False,
-                timeout=1.0,
                 stop_filter=lambda _: self.stop_event.is_set()
             )
         except KeyboardInterrupt:

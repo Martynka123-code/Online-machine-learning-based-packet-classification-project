@@ -26,25 +26,12 @@ class RandomForestOnline:
         Takes a dictionary of features extracted by FlowFeatureExtractor
         and returns the predicted class (e.g., 'Spotify', 'YouTube').
         """
-        if self.model is None:
+        if self.model is None or not self.feature_names:
             return "No model loaded"
             
-        # Ignore warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            
-            df = pd.DataFrame([features_dict])
-            
-            if 'label' in df.columns:
-                df = df.drop(columns=['label'])
-            if 'granularity' in df.columns:
-                df = df.drop(columns=['granularity'])
+        feature_vector = []
+        for col in self.feature_names:
+            feature_vector.append(features_dict.get(col, 0.0))
 
-            if self.feature_names:
-                for col in self.feature_names:
-                    if col not in df.columns:
-                        df[col] = 0.0  # Wypełnienie zerem w razie błędu
-                df = df[self.feature_names]
-
-            prediction = self.model.predict(df)
-            return prediction[0]
+        prediction = self.model.predict([feature_vector])
+        return prediction[0]

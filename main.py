@@ -1,4 +1,5 @@
 import os
+import time
 import threading
 from scapy.all import sniff 
 from config import DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
@@ -74,6 +75,9 @@ def menu_online_mode():
     
     def packet_processor():
         print("[*] Worker thread started: waiting for packets in buffer...")
+        packets_processed_count = 0
+        FLOW_TIMEOUT = 120.0 
+        
         while True:
             packet = sniffer.packet_queue.get() 
             
@@ -86,15 +90,24 @@ def menu_online_mode():
                     continue
 
                 if key not in active_flows:
-                    active_flows[key] = []
-                active_flows[key].append(packet)
+                    active_flows[key] = {"packets": [], "last_seen": time.time()}
+                
+                active_flows[key]["packets"].append(packet)
+                active_flows[key]["last_seen"] = time.time()
 
-                if len(active_flows[key]) >= gran:
-                    features = extractor._calculate_features(active_flows[key][:gran])
+                if len(active_flows[key]["packets"]) >= gran:
+                    features = extractor._calculate_features(active_flows[key]["packets"][:gran])
                     del active_flows[key] 
 
                     prediction = classifier.classify_stream(features)
-                    print(f"[LIVE] Flow: {key[0]}:{key[2]} <-> {key[1]}:{key[3]} | App: {prediction}")
+                    print(f"[LIVE] Flow {key[4]}: {key[0]} <-> {key[1]} | Ports: {key[2]} <-> {key[3]} | App: {prediction}")
+
+                packets_processed_count += 1
+                if packets_processed_count % 1000 == 0:
+                    current_time = time.time()
+                    stale_keys = [k for k, v in active_flows.items() if current_time - v["last_seen"] > FLOW_TIMEOUT]
+                    for k in stale_keys:
+                        del active_flows[k]
 
             except Exception as e:
                 print(f"[ERROR in processor] {type(e).__name__}: {e}")

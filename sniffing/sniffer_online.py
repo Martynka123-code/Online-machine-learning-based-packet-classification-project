@@ -5,14 +5,15 @@ class SnifferOnline:
     def __init__(self, interface=None):
         self.interface = interface
         self.stop_sniffing = False
-        self.packet_queue = queue.Queue() 
+        self.packet_queue = queue.Queue(maxsize=15000) 
 
     def _packet_handler(self, packet):
-        self.packet_queue.put(packet)
-
+        try:
+            self.packet_queue.put(packet, block=False)
+        except queue.Full:
+            pass 
     def start_capture(self):
         print(f"[*] Starting online capture on interface: {self.interface or 'default'}")
-        print("[*] Packets are being buffered asynchronously.")
         sniff(
             iface=self.interface,
             filter="ip",
@@ -23,5 +24,8 @@ class SnifferOnline:
         
     def stop_capture(self):
         self.stop_sniffing = True
-        self.packet_queue.put(None)
+        try:
+            self.packet_queue.put(None, timeout=2)
+        except queue.Full:
+            pass
         print("[*] Capture stopped.")
