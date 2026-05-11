@@ -1,135 +1,105 @@
 import os
 import sys
-
 from config import DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
-
 from preprocessing.feature_extractor import FlowFeatureExtractor
 from models.rf_trainer import RandomForestTrainer
-
-from sniffing.sniffer_training import SnifferTraining
-from sniffing.sniffer_online import SnifferOnline
 from models.rf_online import RandomForestOnline
-from models.cnn_online import CNNOnline
-from ui.interface import UIInterface
+from sniffing.sniffer_online import SnifferOnline
+from visualization.rf_visualizer import plot_granularity_comparison
 
-def run_online_pipeline():
-    """Main function controlling the live classification pipeline."""
-    print("\n" + "=" * 50)
-    print(" STARTING ONLINE PIPELINE ")
-    print("=" * 50)
+def menu_train_models():
+    """
+    Orchestrates the training sweep across all configured granularities.
+    Saves trained models and generates a performance summary plot.
+    """
+    print("\n[*] Initializing training sweep across all granularities...")
+    training_results = {}
 
-    # 1. Select RF model (using the first granularity from config as default, e.g., 50)
-    gran = GRANULARITIES[0] if GRANULARITIES else 150
-    rf_model_path = os.path.join(MODELS_DIR, f"rf_model_{gran}.pkl")
-    
-    if not os.path.exists(rf_model_path):
-        print(f"[!] Error: RF model not found at {rf_model_path}. Train the model first (Option 3).")
-        return
+    for gran in GRANULARITIES:
+        csv_path = os.path.join(DATA_CSV_DIR, f"rf_dataset_{gran}.csv")
+        if not os.path.exists(csv_path):
+            print(f"[!] Dataset missing for granularity {gran}: {csv_path}")
+            continue
 
-    # 2. Initialize models
-    rf_classifier = RandomForestOnline(rf_model_path)
-    cnn_classifier = CNNOnline("data/saved_models/cnn_model.h5") # Placeholder path
-
-    # 3. Buffer for flows (for RF model)
-    active_flows = {} 
-
-    def packet_callback(packet):
-        """This function is called for EVERY packet captured by the sniffer."""
+        print(f"\n--- Training for Granularity: {gran} packets ---")
+        trainer = RandomForestTrainer(csv_path)
+        accuracy = trainer.train_and_evaluate()
         
-        # --- CNN PATH (Single packet byte-level analysis) ---
-        # TODO: Call the logic formatting the packet to N bytes here
-        # cnn_input = format_packet_for_cnn(packet, length=750)
-        # cnn_pred = cnn_classifier.classify_stream(cnn_input)
-        # print(f"[CNN] Prediction: {cnn_pred}")
+        if accuracy:
+            training_results[gran] = accuracy
+            model_file = f"rf_model_{gran}.pkl"
+            trainer.save_model(os.path.join(MODELS_DIR, model_file))
 
-        # --- RF PATH (Flow aggregation) ---
-        # Use FlowFeatureExtractor logic to assign packet to a flow key (5-tuple)
-        temp_extractor = FlowFeatureExtractor(None, None) 
-        key = temp_extractor._get_flow_key(packet)
+    if training_results:
+        plot_granularity_comparison(training_results)
 
-        if key:
-            if key not in active_flows:
-                active_flows[key] = []
-            
-            active_flows[key].append(packet)
+def menu_online_classification():
+    """
+    Launches the real-time classification pipeline.
+    Allows user to select a pre-trained model and starts the network sniffer.
+    """
+    print("\n" + "="*50)
+    print(" LIVE NETWORK TRAFFIC CLASSIFICATION PIPELINE ")
+    print("="*50)
 
-            # If we collected enough packets for the granularity (e.g., 50)
-            if len(active_flows[key]) == gran:
-                # Calculate statistical features for this batch of packets
-                features = temp_extractor._calculate_features(active_flows[key])
-                
-                # RF Classification
-                rf_pred = rf_classifier.classify_stream(features)
-                print(f"[RF] FLOW CLASSIFICATION: {key} -> RESULT: {rf_pred}")
-                
-                # Clear the buffer for this key to collect the next batch
-                active_flows[key] = []
-
-    # 4. Start the Sniffer
-    sniffer = SnifferOnline(callback_function=packet_callback)
-    try:
-        sniffer.start_capture()
-    except KeyboardInterrupt:
-        sniffer.stop_capture()
-        print("\n[*] Returning to main menu.")
-
-def menu_online():
-    """Main function controlling the live classification pipeline."""
-    print("\n" + "=" * 50)
-    print(" STARTING ONLINE PIPELINE ")
-    print("=" * 50)
-
-    # 1. Wybór Granulacji przez użytkownika
-    print(f"Available models for granularities: {GRANULARITIES}")
+    print(f"Available granularities: {GRANULARITIES}")
     choice = input(f"Select granularity to use (default {GRANULARITIES[0]}): ").strip()
-    
-    try:
-        gran = int(choice) if choice else GRANULARITIES[0]
-        if gran not in GRANULARITIES:
-            print(f"[!] Granularity {gran} is not valid. Reverting to {GRANULARITIES[0]}.")
-            gran = GRANULARITIES[0]
-    except ValueError:
-        print(f"[!] Invalid input. Reverting to {GRANULARITIES[0]}.")
-        gran = GRANULARITIES[0]
+    gran = int(choice) if choice else GRANULARITIES[0]
 
-    rf_model_path = os.path.join(MODELS_DIR, f"rf_model_{gran}.pkl")
-    
-    if not os.path.exists(rf_model_path):
-        print(f"[!] Error: RF model not found at {rf_model_path}. Train the model first (Option 4).")
+    model_path = os.path.join(MODELS_DIR, f"rf_model_{gran}.pkl")
+    if not os.path.exists(model_path):
+        print(f"[!] Model not found: {model_path}. Please train the model first.")
         return
 
-    # 2. Initialize models
-    rf_classifier = RandomForestOnline(rf_model_path)
-    cnn_classifier = CNNOnline("data/saved_models/cnn_model.h5") # Placeholder path
+    rf_classifier = RandomForestOnline(model_path)
+    # Temporary extractor for real-time feature calculation
+    extractor = FlowFeatureExtractor(None, None, granularity=gran)
+    active_flows = {}
 
-    # 3. Buffer for flows (for RF model)
-    active_flows = {} 
-
-    def packet_callback(packet):
-        # --- RF PATH (Flow aggregation) ---
-        temp_extractor = FlowFeatureExtractor(None, None) 
-        key = temp_extractor._get_flow_key(packet)
-
+    def packet_processing_logic(packet):
+        """Callback function for the sniffer to process packets in real-time."""
+        key = extractor._get_flow_key(packet)
         if key:
             if key not in active_flows:
                 active_flows[key] = []
-            
             active_flows[key].append(packet)
 
             if len(active_flows[key]) == gran:
-                features = temp_extractor._calculate_features(active_flows[key])
-                rf_pred = rf_classifier.classify_stream(features)
-                print(f"[RF] FLOW CLASSIFICATION: {key} -> RESULT: {rf_pred}")
+                features = extractor._calculate_features(active_flows[key])
+                prediction = rf_classifier.classify_stream(features)
+                print(f"[LIVE] Flow: {key} | Application: {prediction}")
                 active_flows[key] = []
 
-    # 4. Start the Sniffer
-    sniffer = SnifferOnline(callback_function=packet_callback)
+    sniffer = SnifferOnline(packet_processing_logic)
     try:
         sniffer.start_capture()
     except KeyboardInterrupt:
         sniffer.stop_capture()
-        print("\n[*] Returning to main menu.")
+        print("\n[*] Terminating online mode and returning to menu.")
 
+def main_menu():
+    """Primary application entry point and CLI menu router."""
+    while True:
+        print("\n" + "═"*50)
+        print(" OMLBPC PROJECT - CORE SYSTEM INTERFACE ")
+        print("═"*50)
+        print(" 1. Collect Training Data (Sniffer to PCAP)")
+        print(" 2. Feature Extraction    (PCAP to CSV)")
+        print(" 3. Train Models          (RF Training Sweep)")
+        print(" 4. Online Mode           (Real-time Classification)")
+        print(" 0. Exit System")
+
+        cmd = input("\nExecute option: ").strip()
+
+        if cmd == '1': print("[*] Call data collection module...")
+        elif cmd == '2': print("[*] Call extraction module...")
+        elif cmd == '3': menu_train_models()
+        elif cmd == '4': menu_online_classification()
+        elif cmd == '0':
+            print("System shutdown. Goodbye.")
+            sys.exit(0)
+        else:
+            print("[!] Invalid command.")
 
 if __name__ == "__main__":
-    menu_online()
+    main_menu()
