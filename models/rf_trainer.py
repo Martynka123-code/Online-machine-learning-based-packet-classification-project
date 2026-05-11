@@ -15,6 +15,7 @@ from visualization.feature_importance_plot import plot_feature_importance
 from visualization.correlation_plot import plot_feature_correlation
 from visualization.cv_scores_plot import plot_cv_scores
 
+
 class RandomForestTrainer:
     def __init__(self, dataset_path, reports_dir="reports"):
         self.dataset_path = dataset_path
@@ -33,7 +34,7 @@ class RandomForestTrainer:
             if df.empty:
                 print("[!] Dataset is empty.")
                 return None, None, None
-            
+
             drop_cols = [c for c in ["label", "granularity"] if c in df.columns]
             X = df.drop(columns=drop_cols)
             y = df["label"]
@@ -44,6 +45,45 @@ class RandomForestTrainer:
         except Exception as e:
             print(f"[!] Error loading data: {e}")
             return None, None, None
+
+    # --------------------------------------------------------------
+
+    def predict_with_threshold(self, X, threshold=0.60):
+        """
+        Predicts classes with confidence threshold.
+
+        If the highest class probability is below
+        threshold, returns 'OTHER'.
+
+        Parameters
+        ----------
+        X : pd.DataFrame or np.ndarray
+            Feature matrix.
+        threshold : float
+            Minimum confidence required for prediction.
+
+        Returns
+        -------
+        list[str]
+            Predicted labels.
+        """
+        if self.model is None:
+            raise ValueError("Model is not loaded/trained.")
+
+        probs = self.model.predict_proba(X)
+        predictions = []
+
+        for p in probs:
+            max_prob = np.max(p)
+            if max_prob < threshold:
+                predictions.append("OTHER")
+            else:
+                predicted_class = self.model.classes_[np.argmax(p)]
+                predictions.append(predicted_class)
+
+        return predictions
+
+    # --------------------------------------------------------------
 
     def _drop_correlated_features(self, X, y, threshold=0.85):
         """Delete features that are highly correlated, keeping the one with higher importance."""
@@ -73,7 +113,7 @@ class RandomForestTrainer:
         X, y, _ = self._load_data()
         if X is None: return
 
-        print("\n" + "="*50 + "\n FEATURE VALIDATION REPORT \n" + "="*50)
+        print("\n" + "=" * 50 + "\n FEATURE VALIDATION REPORT \n" + "=" * 50)
         missing = X.isnull().sum()
         if missing.any():
             print(f"Features with missing values:\n{missing[missing > 0]}")
@@ -115,7 +155,7 @@ class RandomForestTrainer:
 
         preds = self.model.predict(X_test)
         acc = accuracy_score(y_test, preds)
-        
+
         print(f"\n[+] Result for {gran_tag}: Accuracy: {acc * 100:.2f}%")
         print(classification_report(y_test, preds, digits=4))
 
