@@ -90,23 +90,38 @@ def menu_train_models():
 def menu_online_mode():
     """Option 5: Live classification with asynchronous packet processing buffer."""
     print("\n--- Online Classification (Real-time) ---")
-    print(f"Available granularities: {GRANULARITIES}")
-    choice = input(f"Select granularity (default {GRANULARITIES[0]}): ").strip()
-    gran = int(choice) if choice else GRANULARITIES[0]
+    
+    agg_mode = input("Select aggregation mode [packet / time]: ").strip().lower()
+    if agg_mode not in ['packet', 'time']:
+        print("[!] Invalid mode. Defaulting to 'packet'.")
+        agg_mode = 'packet'
+        
+    if agg_mode == 'packet':
+        from config import PACKET_GRANULARITIES
+        print(f"Available packet granularities: {PACKET_GRANULARITIES}")
+        choice = input(f"Select value (default {PACKET_GRANULARITIES[0]}): ").strip()
+        agg_value = int(choice) if choice else PACKET_GRANULARITIES[0]
+        model_name = f"rf_model_{agg_value}.pkl" 
+    else:
+        from config import TIME_WINDOWS
+        print(f"Available time windows (seconds): {TIME_WINDOWS}")
+        choice = input(f"Select value (default {TIME_WINDOWS[0]}): ").strip()
+        agg_value = float(choice) if choice else TIME_WINDOWS[0]
+        model_name = f"rf_model_time_{agg_value}.pkl" 
 
-    model_path = os.path.join(MODELS_DIR, f"rf_model_{gran}.pkl")
+    model_path = os.path.join(MODELS_DIR, model_name)
     if not os.path.exists(model_path):
-        print("[!] Model not found. Train it first.")
+        print(f"[!] Model '{model_name}' not found. Train it first (Option 4).")
         return
 
     classifier = RandomForestOnline(model_path)
-    extractor = FlowFeatureExtractor(None, None, granularity=gran)
+    extractor = FlowFeatureExtractor(pcap_path=None, label=None, agg_mode=agg_mode, agg_value=agg_value)
     sniffer = SnifferOnline()
     active_flows = {}
     
     def packet_processor():
         """Background worker thread to handle packet buffering and classification."""
-        print("[*] Worker thread started: processing packets...")
+        print(f"[*] Worker thread started: processing packets in '{agg_mode}' mode (val: {agg_value})...")
         FLOW_TIMEOUT = 120.0 
         
         while True:
@@ -123,13 +138,26 @@ def menu_online_mode():
                 active_flows[key]["packets"].append(packet)
                 active_flows[key]["last_seen"] = time.time()
 
-                # If flow reached required packet window size, classify it
-                if len(active_flows[key]["packets"]) >= gran:
-                    features = extractor._calculate_features(active_flows[key]["packets"][:gran])
+                flow_packets = active_flows[key]["packets"]
+                flush_flow = False
+
+                if agg_mode == "packet":
+                    if len(flow_packets) >= agg_value:
+                        flush_flow = True
+                elif agg_mode == "time":
+                    time_diff = float(flow_packets[-1].time - flow_packets[0].time)
+                    if time_diff >= agg_value:
+                        flush_flow = True
+
+                if flush_flow:
+                    features = extractor._calculate_features(flow_packets)
                     del active_flows[key] 
 
-                    prediction = classifier.classify_stream(features)
-                    print(f"[LIVE] Flow {key[4]}: {key[0]} <-> {key[1]} | App: {prediction}")
+                    result = classifier.classify_stream(features)
+                    
+                    pred = result.get("prediction", "UNKNOWN")
+                    conf = result.get("confidence", 0.0)
+                    print(f"[LIVE] Flow {key[4]}: {key[0]}:{key[2]} <-> {key[1]}:{key[3]} | App: {pred} ({conf*100:.1f}%)")
 
                 sniffer.packet_queue.task_done()
 

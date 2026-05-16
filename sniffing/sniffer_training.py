@@ -1,3 +1,4 @@
+# sniffing/sniffer_training.py
 import csv
 import json
 import os
@@ -11,10 +12,15 @@ from pathlib import Path
 import psutil
 from scapy.all import PcapWriter, conf, sniff
 from scapy.layers.inet import IP, TCP, UDP
-from scapy.layers.inet6 import IPv6 
+from scapy.layers.inet6 import IPv6
 from config import DATA_RAW_DIR, DATA_CSV_DIR
 
 class SnifferTraining:
+    """
+    Advanced Sniffer for training data collection. 
+    Maps ports to processes in real-time and extracts packet features.
+    Supports IPv4 and IPv6.
+    """
     def __init__(self, target_apps: list[str]):
         self.target_apps = [a.lower() for a in target_apps]
         self.local_ips = self._get_local_ips()
@@ -29,12 +35,14 @@ class SnifferTraining:
         ips = set()
         for addrs in psutil.net_if_addrs().values():
             for addr in addrs:
+                # Support for both IPv4 and IPv6
                 if addr.family in (socket.AF_INET, socket.AF_INET6):
                     if not addr.address.startswith("127.") and addr.address != "::1":
-                        ips.add(addr.address.split('%')[0])
+                        ips.add(addr.address.split('%')[0]) 
         return ips
 
     def _port_mapping_loop(self):
+        """Background thread to update port-to-process mapping."""
         while not self.stop_event.is_set():
             temp_map = {}
             try:
@@ -97,7 +105,7 @@ class SnifferTraining:
         print("[*] Starting capture. Press Ctrl+C to stop.")
         try:
             sniff(
-                filter="ip or ip6",
+                filter="ip or ip6", 
                 prn=self._handle_packet,
                 store=False,
                 stop_filter=lambda _: self.stop_event.is_set()
