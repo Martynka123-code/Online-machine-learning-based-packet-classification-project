@@ -4,21 +4,21 @@ import pandas as pd
 from scapy.all import rdpcap
 from scapy.layers.inet import IP, TCP, UDP
 from scapy.layers.inet6 import IPv6
+from scapy.utils import PcapReader
 import warnings
 
-warnings.filterwarnings('ignore')  
+warnings.filterwarnings('ignore')
 
 class FlowFeatureExtractor:
-    def __init__(self, pcap_path=None, label=None, granularity=100, time_window=1.0):
+    def __init__(self, pcap_path=None, label=None, agg_mode="packet", agg_value=100):
         """
-        pcap_path: Path to the .pcap file (None for Online mode)
-        label: Traffic class label (None for Online mode)
-        time_window: Max time in seconds to wait before flushing the flow aggregate
+        agg_mode: "packet" (aggregate by packet count) or "time" (aggregate by time in seconds)
+        agg_value: threshold for the chosen mode (e.g., 50 packets or 1.5 seconds)
         """
         self.pcap_path = pcap_path
         self.label = label
-        self.granularity = granularity
-        self.time_window = time_window 
+        self.agg_mode = agg_mode
+        self.agg_value = agg_value
         self.flows = {}
         self.dataset = []
 
@@ -59,20 +59,17 @@ class FlowFeatureExtractor:
 
         iat_mean = np.mean(iats)
         iat_std = np.std(iats)
-        iat_cov = (iat_std / iat_mean) if iat_mean > 0 else 0.0
 
         features = {
             "pkt_len_max": np.max(pkt_lengths),
             "pkt_len_std": np.std(pkt_lengths),
             "pkt_len_p50": np.percentile(pkt_lengths, 50),
-            "pkt_len_p75": np.percentile(pkt_lengths, 75),
             "payload_median": np.median(payload_lengths),
             "iat_std": iat_std,
-            "iat_p75_minus_p50": np.percentile(iats, 75) - np.median(iats),
-            "iat_p95_minus_p50": np.percentile(iats, 95) - np.median(iats),
-            "iat_cov_std_mean": iat_cov,
             "iat_median": np.median(iats),
-            "granularity": len(packets)
+            "agg_mode": self.agg_mode,
+            "agg_value": self.agg_value,
+            "actual_packets_in_flow": len(packets)
         }
         
         if self.label is not None:
@@ -85,9 +82,8 @@ class FlowFeatureExtractor:
             print("[!] Error: No PCAP path provided. This method is for offline extraction.")
             return
 
-        print(f"[*] Extracting features from: {self.pcap_path} | Granularity: {self.granularity} | Time Window: {self.time_window}s")
+        print(f"[*] Extracting: {self.pcap_path} | Mode: {self.agg_mode} | Value: {self.agg_value}")
         
-        from scapy.utils import PcapReader
         with PcapReader(self.pcap_path) as packets:
             for pkt in packets:
                 flow_key = self._get_flow_key(pkt)
@@ -97,11 +93,20 @@ class FlowFeatureExtractor:
                     self.flows[flow_key] = []
                     
                 self.flows[flow_key].append(pkt)
-
                 flow_packets = self.flows[flow_key]
-                time_diff = float(flow_packets[-1].time - flow_packets[0].time)
 
-                if len(flow_packets) >= self.granularity or time_diff >= self.time_window:
+                flush_flow = False
+
+                if self.agg_mode == "packet":
+                    if len(flow_packets) >= self.agg_value:
+                        flush_flow = True
+                
+                elif self.agg_mode == "time":
+                    time_diff = float(flow_packets[-1].time - flow_packets[0].time)
+                    if time_diff >= self.agg_value:
+                        flush_flow = True
+
+                if flush_flow:
                     self.dataset.append(self._calculate_features(flow_packets))
                     self.flows[flow_key] = []  
 
@@ -110,8 +115,6 @@ class FlowFeatureExtractor:
 
         if self.dataset:
             self._save_batch(output_csv)
-        else:
-            print("[!] Not enough packets to create a single aggregate.")
 
     def _save_batch(self, output_csv):
         df = pd.DataFrame(self.dataset).round(5)
