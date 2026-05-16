@@ -8,12 +8,9 @@ import warnings
 
 warnings.filterwarnings('ignore')  # Suppress Scapy's warnings
 
+
 class FlowFeatureExtractor:
-    def __init__(self, pcap_path=None, label=None, granularity=100):
-        """
-        pcap_path: Path to the .pcap file (None for Online mode)
-        label: Traffic class label (None for Online mode)
-        """
+    def __init__(self, pcap_path, label, granularity = 100):
         self.pcap_path = pcap_path
         self.label = label
         self.granularity = granularity
@@ -68,21 +65,13 @@ class FlowFeatureExtractor:
             "iat_p95_minus_p50": np.percentile(iats, 95) - np.median(iats),
             "iat_cov_std_mean": iat_cov,
             "iat_median": np.median(iats),
-            "granularity": self.granularity
+            "granularity": self.granularity,
+            "label": self.label
         }
-        
-        # Add label only if we are in training/extraction mode
-        if self.label is not None:
-            features["label"] = self.label
-            
         return features
 
-    def process_and_save(self, output_csv, batch_size=10000):
-        """Extracts features from a pcap file and appends results to a csv file using batches to save RAM."""
-        if self.pcap_path is None:
-            print("[!] Error: No PCAP path provided. This method is for offline extraction.")
-            return
-
+    def process_and_save(self, output_csv):
+        """Extracts features from a pcap file and append results to a csv file."""
         print(f"[*] Extracting features from: {self.pcap_path} | Granularity: {self.granularity}")
         packets = rdpcap(self.pcap_path)
 
@@ -95,20 +84,13 @@ class FlowFeatureExtractor:
 
             if len(self.flows[flow_key]) == self.granularity:
                 self.dataset.append(self._calculate_features(self.flows[flow_key]))
-                self.flows[flow_key] = []  
+                self.flows[flow_key] = []  # Reset window for the next aggregate.
 
-                if len(self.dataset) >= batch_size:
-                    self._save_batch(output_csv)
+        if not self.dataset:
+            print("[!] No enough number of packets to set a single aggregate.")
+            return
 
-        if self.dataset:
-            self._save_batch(output_csv)
-        else:
-            print("[!] Not enough packets to create a single aggregate.")
-
-    def _save_batch(self, output_csv):
-        """Helper function to save a batch and clear memory."""
         df = pd.DataFrame(self.dataset).round(5)
         file_exists = os.path.isfile(output_csv)
         df.to_csv(output_csv, mode='a', header=not file_exists, index=False)
-        print(f"[+] Saved batch of {len(self.dataset)} aggregates to {output_csv}")
-        self.dataset.clear()  
+        print(f"[+] Saved {len(self.dataset)} aggregates to {output_csv}")
