@@ -24,7 +24,7 @@ class SnifferOnline:
         print(f"[*] Starting online capture on interface: {self.interface or 'default'}")
         sniff(
             iface=self.interface,
-            filter="ip",
+            filter="ip or ipv6",
             prn=self._packet_handler,
             store=False,
             stop_filter=lambda x: self.stop_sniffing

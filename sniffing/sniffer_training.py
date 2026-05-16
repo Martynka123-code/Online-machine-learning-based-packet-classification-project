@@ -11,13 +11,10 @@ from pathlib import Path
 import psutil
 from scapy.all import PcapWriter, conf, sniff
 from scapy.layers.inet import IP, TCP, UDP
+from scapy.layers.inet6 import IPv6 
 from config import DATA_RAW_DIR, DATA_CSV_DIR
 
 class SnifferTraining:
-    """
-    Advanced Sniffer for training data collection. 
-    Maps ports to processes in real-time and extracts packet features.
-    """
     def __init__(self, target_apps: list[str]):
         self.target_apps = [a.lower() for a in target_apps]
         self.local_ips = self._get_local_ips()
@@ -32,12 +29,12 @@ class SnifferTraining:
         ips = set()
         for addrs in psutil.net_if_addrs().values():
             for addr in addrs:
-                if addr.family == socket.AF_INET and not addr.address.startswith("127."):
-                    ips.add(addr.address)
+                if addr.family in (socket.AF_INET, socket.AF_INET6):
+                    if not addr.address.startswith("127.") and addr.address != "::1":
+                        ips.add(addr.address.split('%')[0])
         return ips
 
     def _port_mapping_loop(self):
-        """Background thread to update port-to-process mapping."""
         while not self.stop_event.is_set():
             temp_map = {}
             try:
@@ -61,17 +58,16 @@ class SnifferTraining:
         return (min(a, b), max(a, b), pr)
 
     def _handle_packet(self, packet):
-        if not packet.haslayer(IP) or not (packet.haslayer(TCP) or packet.haslayer(UDP)):
+        if not (packet.haslayer(IP) or packet.haslayer(IPv6)) or not (packet.haslayer(TCP) or packet.haslayer(UDP)):
             return
 
-        ip = packet[IP]
+        ip_layer = packet[IP] if packet.haslayer(IP) else packet[IPv6]
         layer = packet[TCP] if packet.haslayer(TCP) else packet[UDP]
         proto = "TCP" if packet.haslayer(TCP) else "UDP"
         
-        src_ip, dst_ip = ip.src, ip.dst
+        src_ip, dst_ip = ip_layer.src, ip_layer.dst
         sport, dport = layer.sport, layer.dport
         
-        # Check cache or update from port map
         key = self._get_flow_key(src_ip, dst_ip, sport, dport, proto)
         app = self.flow_cache.get(key)
 
@@ -84,7 +80,6 @@ class SnifferTraining:
 
         if app:
             self._save_raw_pcap(app, packet)
-            # You can add CSV/JSONL recording here if needed
 
     def _save_raw_pcap(self, app, packet):
         date_str = datetime.now().strftime("%Y-%m-%d")
@@ -102,7 +97,7 @@ class SnifferTraining:
         print("[*] Starting capture. Press Ctrl+C to stop.")
         try:
             sniff(
-                filter="ip",
+                filter="ip or ip6",
                 prn=self._handle_packet,
                 store=False,
                 stop_filter=lambda _: self.stop_event.is_set()
