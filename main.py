@@ -6,7 +6,7 @@ import sys
 from scapy.all import sniff 
 
 # Import configuration and custom modules
-from config import DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
+from config import DATA_CNN_DIR, DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
 from preprocessing.cnn_preprocessor import CNNPreprocessor
 from sniffing.sniffer_training import SnifferTraining
 from sniffing.sniffer_online import SnifferOnline
@@ -53,12 +53,30 @@ def menu_extract_features():
 def menu_extract_features_cnn():
     print("\n--- Feature Extraction (PCAP to CNN Bytes) ---")
     
-    pcap_path = input("Enter the path to the PCAP file: ").strip()
+    files = [f for f in os.listdir(DATA_RAW_DIR) if f.endswith('.pcap')]
+    if not files:
+        print(f"[!] No PCAP files found in {DATA_RAW_DIR}")
+        return
+
+    print("\nAvailable PCAP files:")
+    for f in files: 
+        print(f"  - {f}")
     
-    # Remember, for CNN the label must be an int (0, 1, 2...) for the Loss function to work
-    label_idx = int(input("Enter the numerical class index (e.g., 0 for Spotify, 1 for YouTube): "))
+    pcap_file = input("\nEnter filename to process: ").strip()
+    pcap_path = os.path.join(DATA_RAW_DIR, pcap_file)
+
+    if not os.path.exists(pcap_path):
+        print("[!] File not found.")
+        return
     
-    output_npz = input("Enter the output file name (e.g., data/processed_csv/cnn_spotify.npz): ").strip()
+    try:
+        label_idx = int(input("Enter the numerical class index (e.g., 0 for Spotify, 1 for YouTube): "))
+    except ValueError:
+        print("[!] Invalid index. It must be an integer.")
+        return
+    
+    pcap_base_name = os.path.splitext(pcap_file)[0]
+    output_npz = os.path.join(DATA_CNN_DIR, f"cnn_dataset_{pcap_base_name}.npz")
     
     preprocessor = CNNPreprocessor(max_length=1000)
     preprocessor.process_pcap(pcap_path, label_idx)
