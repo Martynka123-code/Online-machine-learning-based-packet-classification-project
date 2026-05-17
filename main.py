@@ -7,6 +7,7 @@ from scapy.all import sniff
 
 # Import configuration and custom modules
 from config import DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
+from preprocessing.cnn_preprocessor import CNNPreprocessor
 from sniffing.sniffer_training import SnifferTraining
 from sniffing.sniffer_online import SnifferOnline
 from preprocessing.feature_extractor import FlowFeatureExtractor
@@ -48,6 +49,20 @@ def menu_extract_features():
         output_csv = os.path.join(DATA_CSV_DIR, f"rf_dataset_{gran}.csv")
         extractor = FlowFeatureExtractor(pcap_path, label, granularity=gran)
         extractor.process_and_save(output_csv)
+
+def menu_extract_features_cnn():
+    print("\n--- Feature Extraction (PCAP to CNN Bytes) ---")
+    
+    pcap_path = input("Enter the path to the PCAP file: ").strip()
+    
+    # Remember, for CNN the label must be an int (0, 1, 2...) for the Loss function to work
+    label_idx = int(input("Enter the numerical class index (e.g., 0 for Spotify, 1 for YouTube): "))
+    
+    output_npz = input("Enter the output file name (e.g., data/processed_csv/cnn_spotify.npz): ").strip()
+    
+    preprocessor = CNNPreprocessor(max_length=1000)
+    preprocessor.process_pcap(pcap_path, label_idx)
+    preprocessor.save_dataset(output_npz)
 
 def menu_validate_datasets():
     """Option 3: Quality check for generated CSV datasets (from test2)."""
@@ -187,18 +202,20 @@ def main():
         print(" NETWORK TRAFFIC CLASSIFIER - INTEGRATED SYSTEM ")
         print("="*55)
         print(" 1. Collect Training Data (Sniffer)")
-        print(" 2. Extract Features (PCAP to CSV)")
-        print(" 3. Validate Datasets (Quality Report)")
-        print(" 4. Train Models & Analytics (RF)")
-        print(" 5. Run Online Classification (Live)")
+        print(" 2. Extract Features (PCAP to CSV) [Random Forest]")
+        print(" 3. Extract Features (PCAP to NPZ) [CNN]")
+        print(" 4. Validate Datasets (Quality Report)")
+        print(" 5. Train Models & Analytics (RF)")
+        print(" 6. Run Online Classification (Live)")
         print(" 0. Exit")
         
         cmd = input("\nSelect option: ").strip()
         if cmd == '1': menu_collect_data()
         elif cmd == '2': menu_extract_features()
-        elif cmd == '3': menu_validate_datasets()
-        elif cmd == '4': menu_train_models()
-        elif cmd == '5': menu_online_mode()
+        elif cmd == '3': menu_extract_features_cnn()
+        elif cmd == '4': menu_validate_datasets()
+        elif cmd == '5': menu_train_models()
+        elif cmd == '6': menu_online_mode()
         elif cmd == '0': break
 
 if __name__ == "__main__":
