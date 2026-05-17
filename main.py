@@ -13,6 +13,9 @@ from sniffing.sniffer_online import SnifferOnline
 from preprocessing.feature_extractor import FlowFeatureExtractor
 from models.rf_trainer import RandomForestTrainer
 from models.rf_online import RandomForestOnline
+from torch.utils.data import DataLoader, random_split
+from pytorch_lightning import Trainer
+from models.cnn_trainer import OptimizedPacketCNN, PacketByteDataset
 from visualization.rf_visualizer import plot_granularity_comparison
 
 
@@ -120,6 +123,67 @@ def menu_train_models():
             print(f"Granularity {g:3}: Accuracy {a:.2%}")
         plot_granularity_comparison(results)
 
+def menu_train_cnn_models():
+    """Option 6: Train CNN models using PyTorch Lightning with raw byte datasets."""
+    print("\n--- CNN Model Training (PyTorch Lightning) ---")
+    
+    # 1. List available .npz datasets in data/processed_csv/
+    files = [f for f in os.listdir(DATA_CSV_DIR) if f.endswith('.npz')]
+    if not files:
+        print(f"[!] No CNN datasets (.npz) found in {DATA_CSV_DIR}. Run CNN feature extraction first.")
+        return
+
+    print("\nAvailable CNN Datasets (.npz):")
+    for f in files: 
+        print(f"  - {f}")
+        
+    dataset_file = input("\nEnter dataset filename to train on: ").strip()
+    dataset_path = os.path.join(DATA_CSV_DIR, dataset_file)
+
+    if not os.path.exists(dataset_path):
+        print("[!] File not found.")
+        return
+
+    # 2. Load dataset and split into train (80%) and validation (20%)
+    try:
+        full_dataset = PacketByteDataset(dataset_path)
+        train_size = int(0.8 * len(full_dataset))
+        val_size = len(full_dataset) - train_size
+        train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+        
+        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=0)
+        val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=0)
+    except Exception as e:
+        print(f"[ERROR] Failed to prepare DataLoaders: {e}")
+        return
+
+    # 3. Get training configuration from user
+    try:
+        output_dim = int(input("Enter number of target application classes (output_dim, e.g., 2, 6): "))
+        epochs = int(input("Enter number of training epochs (default 10): ") or 10)
+    except ValueError:
+        print("[!] Invalid inputs. Numbers must be integers.")
+        return
+
+    # 4. Initialize the CNN model and the PyTorch Lightning Trainer
+    model = OptimizedPacketCNN(output_dim=output_dim, signal_length=1000)
+    
+    print("\n[*] Starting PyTorch Lightning Training Session...")
+    # accelerator='auto' automatically detects and uses GPU (CUDA/MPS) if available
+    trainer = Trainer(max_epochs=epochs, accelerator="auto", devices=1)
+    
+    try:
+        trainer.fit(model, train_loader, val_loader)
+        
+        # 5. Save the trained checkpoint
+        model_base_name = os.path.splitext(dataset_file)[0].replace("cnn_dataset_", "")
+        model_save_path = os.path.join(MODELS_DIR, f"cnn_model_{model_base_name}.ckpt")
+        trainer.save_checkpoint(model_save_path)
+        print(f"\n[+] CNN Training complete! Checkpoint saved to: {model_save_path}")
+        
+    except Exception as e:
+        print(f"[!] Training interrupted or failed: {e}")
+
 def menu_online_mode():
     """Option 5: Live classification with asynchronous packet processing buffer."""
     print("\n--- Online Classification (Real-time) ---")
@@ -222,9 +286,10 @@ def main():
         print(" 1. Collect Training Data (Sniffer)")
         print(" 2. Extract Features (PCAP to CSV) [Random Forest]")
         print(" 3. Extract Features (PCAP to NPZ) [CNN]")
-        print(" 4. Validate Datasets (Quality Report)")
-        print(" 5. Train Models & Analytics (RF)")
-        print(" 6. Run Online Classification (Live)")
+        print(" 4. Validate Datasets (Quality Report) [Random Forest]")
+        print(" 5. Train Random Forest Models")
+        print(" 6. Train CNN Models (PyTorch Lightning)")
+        print(" 7. Run Online Classification (Live) [Random Forest]")
         print(" 0. Exit")
         
         cmd = input("\nSelect option: ").strip()
@@ -233,11 +298,11 @@ def main():
         elif cmd == '3': menu_extract_features_cnn()
         elif cmd == '4': menu_validate_datasets()
         elif cmd == '5': menu_train_models()
-        elif cmd == '6': menu_online_mode()
+        elif cmd == '6': menu_train_cnn_models()
+        elif cmd == '7': menu_online_mode()
         elif cmd == '0': break
 
 if __name__ == "__main__":
-    # Ensure necessary directories exist
-    for d in [DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, "reports"]:
+    for d in [DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, DATA_CNN_DIR, "reports"]:
         os.makedirs(d, exist_ok=True)
     main()

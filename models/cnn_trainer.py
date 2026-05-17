@@ -1,13 +1,14 @@
-import torch
+# models/cnn_trainer.py
 import numpy as np
+import torch
 from torch import nn as nn
 from torch.nn import functional as F
-from pytorch_lightning import LightningModule
 from torch.utils.data import Dataset
+from pytorch_lightning import LightningModule
 
 class PacketByteDataset(Dataset):
     def __init__(self, npz_path):
-        print(f"[*] Loading data into memory from: {npz_path}")
+        print(f"[*] Loading CNN dataset into memory from: {npz_path}")
         data = np.load(npz_path)
         self.features = data['features']
         self.labels = data['labels']
@@ -17,6 +18,7 @@ class PacketByteDataset(Dataset):
         return len(self.features)
         
     def __getitem__(self, idx):
+        # 1D CNN expects shape: [channels, length] -> [1, 1000]
         x = self.features[idx]
         x = np.expand_dims(x, axis=0) 
         
@@ -31,35 +33,27 @@ class OptimizedPacketCNN(LightningModule):
         self.save_hyperparameters()
         self.learning_rate = learning_rate
 
+        # First convolutional block
         self.conv1 = nn.Sequential(
-            nn.Conv1d(
-                in_channels=1,
-                out_channels=512,
-                kernel_size=3,
-                stride=2,
-                padding=1
-            ),
+            nn.Conv1d(in_channels=1, out_channels=512, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
 
+        # Second convolutional block
         self.conv2 = nn.Sequential(
-            nn.Conv1d(
-                in_channels=512,
-                out_channels=256,
-                kernel_size=3,
-                stride=2,
-                padding=1
-            ),
+            nn.Conv1d(in_channels=512, out_channels=256, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
 
+        # Automatic calculation of input features for dense layers
         dummy_x = torch.rand(1, 1, self.hparams.signal_length, requires_grad=False)
         dummy_x = self.conv1(dummy_x)
         dummy_x = self.conv2(dummy_x)
         max_pool_out = dummy_x.view(1, -1).shape[1]
 
+        # Fully connected layers (Classifier with 0.5 dropout)
         self.fc = nn.Sequential(
             nn.Linear(in_features=max_pool_out, out_features=128),
             nn.ReLU(),
@@ -69,6 +63,7 @@ class OptimizedPacketCNN(LightningModule):
             nn.Dropout(p=0.5)
         )
 
+        # Output layer (Logits)
         self.out = nn.Linear(in_features=32, out_features=self.hparams.output_dim)
 
     def forward(self, x):
