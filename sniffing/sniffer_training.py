@@ -1,4 +1,3 @@
-# sniffing/sniffer_training.py
 import csv
 import json
 import os

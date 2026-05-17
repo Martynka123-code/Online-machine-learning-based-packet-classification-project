@@ -2,11 +2,13 @@ import os
 import time
 import threading
 import queue
-import sys
+import json
 from scapy.all import sniff 
+import numpy as np
 
 # Import configuration and custom modules
 from config import DATA_CNN_DIR, DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
+from models.cnn_online import CNNOnline
 from preprocessing.cnn_preprocessor import CNNPreprocessor
 from sniffing.sniffer_training import SnifferTraining
 from sniffing.sniffer_online import SnifferOnline
@@ -53,36 +55,46 @@ def menu_extract_features():
         extractor = FlowFeatureExtractor(pcap_path, label, granularity=gran)
         extractor.process_and_save(output_csv)
 
+
 def menu_extract_features_cnn():
-    print("\n--- Feature Extraction (PCAP to CNN Bytes) ---")
+    """Option 3: Convert ALL available PCAP files into a single master NPZ dataset for CNN."""
+    print("\n--- Batch Feature Extraction for CNN (All PCAPs to Single Master NPZ) ---")
     
     files = [f for f in os.listdir(DATA_RAW_DIR) if f.endswith('.pcap')]
     if not files:
         print(f"[!] No PCAP files found in {DATA_RAW_DIR}")
         return
 
-    print("\nAvailable PCAP files:")
-    for f in files: 
-        print(f"  - {f}")
+    # 1. Automatically detect unique applications based on the filename structure (app_date.pcap)
+    detected_apps = sorted(list(set([os.path.splitext(f)[0].split('_')[0] for f in files])))
     
-    pcap_file = input("\nEnter filename to process: ").strip()
-    pcap_path = os.path.join(DATA_RAW_DIR, pcap_file)
+    # 2. Dynamically build a class-to-index mapping dictionary
+    class_map = {app_name: idx for idx, app_name in enumerate(detected_apps)}
+    
+    print("\n[+] Automatically discovered applications and assigned indices:")
+    for app_name, idx in class_map.items():
+        print(f"  Class {idx}: {app_name}")
+        
+    # Save the class map to a JSON file so the online module knows which index maps to which app
+    map_path = os.path.join(DATA_CSV_DIR, "cnn_class_map.json")
+    with open(map_path, 'w') as f:
+        json.dump(class_map, f, indent=4)
+    print(f"[+] Class mapping dictionary saved to: {map_path}")
 
-    if not os.path.exists(pcap_path):
-        print("[!] File not found.")
-        return
-    
-    try:
-        label_idx = int(input("Enter the numerical class index (e.g., 0 for Spotify, 1 for YouTube): "))
-    except ValueError:
-        print("[!] Invalid index. It must be an integer.")
-        return
-    
-    pcap_base_name = os.path.splitext(pcap_file)[0]
-    output_npz = os.path.join(DATA_CNN_DIR, f"cnn_dataset_{pcap_base_name}.npz")
-    
+    # 3. Initialize preprocessor and loop through all PCAP files to accumulate data
     preprocessor = CNNPreprocessor(max_length=1000)
-    preprocessor.process_pcap(pcap_path, label_idx)
+    print("\n[*] Processing PCAP files into a combined memory array...")
+    
+    for f in files:
+        app_name = os.path.splitext(f)[0].split('_')[0]
+        label_idx = class_map[app_name]
+        pcap_path = os.path.join(DATA_RAW_DIR, f)
+        
+        # This will append tensors and labels internally into preprocessor.data and preprocessor.labels
+        preprocessor.process_pcap(pcap_path, label_idx)
+
+    # 4. Save everything into one combined master dataset file
+    output_npz = os.path.join(DATA_CNN_DIR, "cnn_dataset_master.npz")
     preprocessor.save_dataset(output_npz)
 
 def menu_validate_datasets():
@@ -128,9 +140,9 @@ def menu_train_cnn_models():
     print("\n--- CNN Model Training (PyTorch Lightning) ---")
     
     # 1. List available .npz datasets in data/processed_csv/
-    files = [f for f in os.listdir(DATA_CSV_DIR) if f.endswith('.npz')]
+    files = [f for f in os.listdir(DATA_CNN_DIR) if f.endswith('.npz')]
     if not files:
-        print(f"[!] No CNN datasets (.npz) found in {DATA_CSV_DIR}. Run CNN feature extraction first.")
+        print(f"[!] No CNN datasets (.npz) found in {DATA_CNN_DIR}. Run CNN feature extraction first.")
         return
 
     print("\nAvailable CNN Datasets (.npz):")
@@ -138,13 +150,12 @@ def menu_train_cnn_models():
         print(f"  - {f}")
         
     dataset_file = input("\nEnter dataset filename to train on: ").strip()
-    dataset_path = os.path.join(DATA_CSV_DIR, dataset_file)
+    dataset_path = os.path.join(DATA_CNN_DIR, dataset_file)
 
     if not os.path.exists(dataset_path):
         print("[!] File not found.")
         return
 
-    # 2. Load dataset and split into train (80%) and validation (20%)
     try:
         full_dataset = PacketByteDataset(dataset_path)
         train_size = int(0.8 * len(full_dataset))
@@ -157,19 +168,19 @@ def menu_train_cnn_models():
         print(f"[ERROR] Failed to prepare DataLoaders: {e}")
         return
 
-    # 3. Get training configuration from user
+    unique_labels = np.unique(full_dataset.labels)
+    output_dim = len(unique_labels)
+    print(f"[+] Automatically detected output_dim: {output_dim} target classes.")
+
     try:
-        output_dim = int(input("Enter number of target application classes (output_dim, e.g., 2, 6): "))
         epochs = int(input("Enter number of training epochs (default 10): ") or 10)
     except ValueError:
         print("[!] Invalid inputs. Numbers must be integers.")
         return
 
-    # 4. Initialize the CNN model and the PyTorch Lightning Trainer
     model = OptimizedPacketCNN(output_dim=output_dim, signal_length=1000)
     
     print("\n[*] Starting PyTorch Lightning Training Session...")
-    # accelerator='auto' automatically detects and uses GPU (CUDA/MPS) if available
     trainer = Trainer(max_epochs=epochs, accelerator="auto", devices=1)
     
     try:
@@ -277,6 +288,75 @@ def menu_online_mode():
         sniffer.stop_capture()
         processor_thread.join(timeout=1.0)
 
+def menu_online_mode_cnn():
+    """Option 8: Live packet classification using the trained CNN model (Per-Packet)."""
+    print("\n--- Online Classification (Real-time CNN) ---")
+    
+    # 1. Define required file paths (using your clean DATA_CNN_DIR layout)
+    model_path = os.path.join(MODELS_DIR, "cnn_model_master.ckpt")
+    class_map_path = os.path.join(DATA_CNN_DIR, "cnn_class_map.json")
+    
+    if not os.path.exists(model_path) or not os.path.exists(class_map_path):
+        print(f"[!] Required files not found. Ensure cnn_model_master.ckpt and cnn_class_map.json exist.")
+        return
+
+    # 2. Initialize the live CNN classifier
+    classifier = CNNOnline(model_path, class_map_path)
+    if classifier.model is None:
+        return
+
+    sniffer = SnifferOnline()
+    
+    # 3. Define the async background worker
+    def packet_processor():
+        print("[*] CNN Worker thread started: processing packets live packet-by-packet...")
+        while True:
+            try:
+                # Retrieve packet from the sniffer queue
+                packet = sniffer.packet_queue.get(timeout=1.0)
+                if packet is None: 
+                    break
+                
+                # Perform instant per-packet classification
+                app_name, confidence = classifier.predict_packet(packet)
+                
+                if app_name is not None:
+                    # Parse basic metadata from the packet layers for clear user display
+                    from scapy.layers.inet import IP, TCP, UDP
+                    from scapy.layers.inet6 import IPv6
+                    
+                    proto = "TCP" if packet.haslayer(TCP) else "UDP"
+                    sport = packet[TCP].sport if packet.haslayer(TCP) else packet[UDP].sport
+                    dport = packet[TCP].dport if packet.haslayer(TCP) else packet[UDP].dport
+                    
+                    if packet.haslayer(IP):
+                        src, dst = packet[IP].src, packet[IP].dst
+                    elif packet.haslayer(IPv6):
+                        src, dst = packet[IPv6].src, packet[IPv6].dst
+                    else:
+                        src, dst = "unknown", "unknown"
+                        
+                    # Output classification results immediately to the screen
+                    print(f"[LIVE-CNN] {src}:{sport} -> {dst}:{dport} ({proto}) | App: {app_name.upper()} ({confidence*100:.1f}%)")
+                
+                sniffer.packet_queue.task_done()
+            except queue.Empty:
+                pass
+            except Exception as e:
+                print(f"[ERROR] {e}")
+
+    # 4. Start the processing worker in a daemon thread
+    processor_thread = threading.Thread(target=packet_processor, daemon=True)
+    processor_thread.start()
+
+    # 5. Start packet capturing on the sniffer side (blocks main thread until Ctrl+C)
+    try:
+        sniffer.start_capture()
+    except KeyboardInterrupt:
+        print("\n[*] Stopping live CNN capture...")
+        sniffer.stop_capture()
+        processor_thread.join(timeout=1.0)
+
 def main():
     """Main application loop."""
     while True:
@@ -290,6 +370,7 @@ def main():
         print(" 5. Train Random Forest Models")
         print(" 6. Train CNN Models (PyTorch Lightning)")
         print(" 7. Run Online Classification (Live) [Random Forest]")
+        print(" 8. Run Online Classification (Live) [CNN]") # <--- DODANE
         print(" 0. Exit")
         
         cmd = input("\nSelect option: ").strip()
@@ -300,6 +381,7 @@ def main():
         elif cmd == '5': menu_train_models()
         elif cmd == '6': menu_train_cnn_models()
         elif cmd == '7': menu_online_mode()
+        elif cmd == '8': menu_online_mode_cnn() # <--- PODPIĘCIE FUNKCJI
         elif cmd == '0': break
 
 if __name__ == "__main__":
