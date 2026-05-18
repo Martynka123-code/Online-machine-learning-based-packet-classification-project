@@ -26,11 +26,11 @@ class FlowFeatureExtractor:
     """
 
     def __init__(
-        self,
-        pcap_path=None,
-        label=None,
-        agg_mode="packet",
-        agg_value=100
+            self,
+            pcap_path=None,
+            label=None,
+            agg_mode="packet",
+            agg_value=100
     ):
 
         self.pcap_path = pcap_path
@@ -119,7 +119,6 @@ class FlowFeatureExtractor:
         )
 
         for flag, count in flag_counts.items():
-
             features[
                 f"tcp_{flag.lower()}_ratio"
             ] = count / packet_count
@@ -129,8 +128,8 @@ class FlowFeatureExtractor:
         # --------------------------------------------------------------
 
         features["tcp_retrans_ratio"] = (
-            retransmission_count(packets)
-            / packet_count
+                retransmission_count(packets)
+                / packet_count
         )
 
         # --------------------------------------------------------------
@@ -185,9 +184,9 @@ class FlowFeatureExtractor:
     # ------------------------------------------------------------------
 
     def process_and_save(
-        self,
-        output_csv,
-        batch_size=10000
+            self,
+            output_csv,
+            batch_size=10000
     ):
 
         if self.pcap_path is None:

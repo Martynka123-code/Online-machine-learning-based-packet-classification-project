@@ -270,8 +270,16 @@ def menu_online_mode():
 
                     pred = result.get("prediction", "UNKNOWN")
                     conf = result.get("confidence", 0.0)
+                    probs = result.get("probabilities", {})
+
+                    # Formatowanie słownika prawdopodobieństw do czytelnego stringa
+                    # np. "spotify: 85.0%, youtube: 10.5%, inne: 4.5%"
+                    probs_str = ", ".join([f"{label}: {prob * 100:.1f}%" for label, prob in probs.items()])
+
                     print(
-                        f"[LIVE] Flow {key[4]}: {key[0]}:{key[2]} <-> {key[1]}:{key[3]} | App: {pred} ({conf * 100:.1f}%)")
+                        f"[LIVE] Flow {key[4]}: {key[0]}:{key[2]} <-> {key[1]}:{key[3]} | "
+                        f"App: {pred} ({conf * 100:.1f}%) | Szczegóły: [{probs_str}]"
+                    )
 
                 sniffer.packet_queue.task_done()
 
