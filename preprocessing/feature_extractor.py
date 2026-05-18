@@ -139,6 +139,16 @@ class FlowFeatureExtractor:
         features.update(
             burst_features(packets)
         )
+        # --------------------------------------------------------------
+        # Transport Protocol Ratios (UDP)
+        # --------------------------------------------------------------
+        udp_count = 0
+        for packet in packets:
+            # Zakładając, że 'packets' to lista obiektów pakietów z biblioteki Scapy
+            if packet.haslayer("UDP"):
+                udp_count += 1
+
+        features["udp_ratio"] = udp_count / packet_count
 
         # --------------------------------------------------------------
         # Metadata
