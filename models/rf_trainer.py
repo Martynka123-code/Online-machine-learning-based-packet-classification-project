@@ -35,7 +35,7 @@ class RandomForestTrainer:
                 print("[!] Dataset is empty.")
                 return None, None, None
 
-            drop_cols = [c for c in ["label", "granularity"] if c in df.columns]
+            drop_cols = [c for c in ["label", "granularity", "agg_mode", "agg_value"] if c in df.columns]
             X = df.drop(columns=drop_cols)
             y = df["label"]
             self.feature_names = list(X.columns)
@@ -87,7 +87,7 @@ class RandomForestTrainer:
 
     def _drop_correlated_features(self, X, y, threshold=0.85):
         """Delete features that are highly correlated, keeping the one with higher importance."""
-        pre = RandomForestClassifier(n_estimators=50, random_state=42)
+        pre = RandomForestClassifier(n_estimators=50, random_state=32)
         pre.fit(X, y)
 
         importances = pd.Series(pre.feature_importances_, index=X.columns)
