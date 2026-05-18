@@ -20,6 +20,7 @@ class OptimizedPacketCNN(LightningModule):
                 stride=2,
                 padding=1
             ),
+            nn.BatchNorm1d(512),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
@@ -33,6 +34,7 @@ class OptimizedPacketCNN(LightningModule):
                 stride=2,
                 padding=1
             ),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
@@ -46,9 +48,11 @@ class OptimizedPacketCNN(LightningModule):
         # Warstwy w pełni połączone (Klasyfikator gęsty z dropoutem 0.5 )
         self.fc = nn.Sequential(
             nn.Linear(in_features=max_pool_out, out_features=128),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(p=0.5),
             nn.Linear(in_features=128, out_features=32),
+            nn.BatchNorm1d(32),
             nn.ReLU(),
             nn.Dropout(p=0.5)
         )
