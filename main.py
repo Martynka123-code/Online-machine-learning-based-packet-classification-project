@@ -138,12 +138,10 @@ def menu_train_models():
             print(f"Granularity {g:3}: Accuracy {a:.2%}")
         plot_granularity_comparison(results)
 
-
-def menu_train_cnn_models():
+ def menu_train_cnn_models():
     """Option 6: Train CNN models using PyTorch Lightning with raw byte datasets."""
     print("\n--- CNN Model Training (PyTorch Lightning) ---")
 
-    # 1. List available .npz datasets in data/processed_csv/
     files = [f for f in os.listdir(DATA_CNN_DIR) if f.endswith('.npz')]
     if not files:
         print(f"[!] No CNN datasets (.npz) found in {DATA_CNN_DIR}. Run CNN feature extraction first.")
@@ -184,22 +182,84 @@ def menu_train_cnn_models():
 
     model = OptimizedPacketCNN(output_dim=output_dim, signal_length=1000)
 
+    from models.cnn_trainer import MetricsCallback
+    metrics_cb = MetricsCallback()
+
     print("\n[*] Starting PyTorch Lightning Training Session...")
-    trainer = Trainer(max_epochs=epochs, accelerator="auto", devices=1)
+    trainer = Trainer(max_epochs=epochs, accelerator="auto", devices=1, callbacks=[metrics_cb])
 
     try:
         trainer.fit(model, train_loader, val_loader)
 
-        # 5. Save the trained checkpoint
         model_base_name = os.path.splitext(dataset_file)[0].replace("cnn_dataset_", "")
         model_save_path = os.path.join(MODELS_DIR, f"cnn_model_{model_base_name}.ckpt")
         trainer.save_checkpoint(model_save_path)
         print(f"\n[+] CNN Training complete! Checkpoint saved to: {model_save_path}")
 
+        # --- Visualizations ---
+        from visualization.cnn_visualizer import (
+            plot_cnn_training_curves,
+            plot_cnn_class_distribution,
+            plot_cnn_confusion_matrix,
+            plot_cnn_f1_per_class,
+        )
+
+        tag = f"cnn_{model_base_name}"
+
+        if metrics_cb.history["train_loss"]:
+            plot_cnn_training_curves(
+                train_losses=metrics_cb.history["train_loss"],
+                val_losses=metrics_cb.history["val_loss"],
+                val_accuracies=metrics_cb.history["val_acc"],
+                val_f1_scores=metrics_cb.history["val_f1_macro"] or None,
+                reports_dir="reports",
+                tag=tag,
+            )
+
+        class_map_path = os.path.join(DATA_CNN_DIR, "cnn_class_map.json")
+        if os.path.exists(class_map_path):
+            import json
+            with open(class_map_path) as f:
+                class_map = json.load(f)
+
+            plot_cnn_class_distribution(
+                labels=full_dataset.labels,
+                class_map=class_map,
+                reports_dir="reports",
+                tag=tag,
+            )
+
+            # Confusion matrix + per-class F1 on validation split
+            model.eval()
+            all_preds, all_true = [], []
+            with torch.no_grad():
+                for batch in val_loader:
+                    x = batch["feature"].float()
+                    y = batch["label"].long()
+                    logits = model(x)
+                    preds = torch.argmax(logits, dim=1)
+                    all_preds.extend(preds.cpu().numpy())
+                    all_true.extend(y.cpu().numpy())
+
+            plot_cnn_confusion_matrix(
+                y_true=all_true,
+                y_pred=all_preds,
+                class_map=class_map,
+                reports_dir="reports",
+                tag=tag,
+            )
+
+            plot_cnn_f1_per_class(
+                y_true=all_true,
+                y_pred=all_preds,
+                class_map=class_map,
+                reports_dir="reports",
+                tag=tag,
+            )
+
     except Exception as e:
         print(f"[!] Training interrupted or failed: {e}")
-
-
+        
 def menu_online_mode():
     """Option 5: Live classification with asynchronous packet processing buffer."""
     print("\n--- Online Classification (Real-time) ---")

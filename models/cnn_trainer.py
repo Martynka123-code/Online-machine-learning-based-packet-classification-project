@@ -1,10 +1,40 @@
-# models/cnn_trainer.py
 import numpy as np
 import torch
 from torch import nn as nn
 from torch.nn import functional as F
 from torch.utils.data import Dataset
-from pytorch_lightning import LightningModule
+from pytorch_lightning import LightningModule, Callback
+
+
+class MetricsCallback(Callback):
+    """
+    Lightweight callback — collects per-epoch train/val metrics.
+    Pass an instance to Trainer(callbacks=[...]).
+    Access results via .history after training.
+    """
+
+    def __init__(self):
+        self.history = {
+            "train_loss": [],
+            "val_loss": [],
+            "val_acc": [],
+            "val_f1_macro": [],
+        }
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        logged = trainer.callback_metrics
+        if "train_loss" in logged:
+            self.history["train_loss"].append(float(logged["train_loss"]))
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        logged = trainer.callback_metrics
+        if "val_loss" in logged:
+            self.history["val_loss"].append(float(logged["val_loss"]))
+        if "val_acc" in logged:
+            self.history["val_acc"].append(float(logged["val_acc"]))
+        if "val_f1_macro" in logged:
+            self.history["val_f1_macro"].append(float(logged["val_f1_macro"]))
+
 
 class PacketByteDataset(Dataset):
     def __init__(self, npz_path):
@@ -13,19 +43,19 @@ class PacketByteDataset(Dataset):
         self.features = data['features']
         self.labels = data['labels']
         print(f"[+] Loaded {len(self.features)} packets.")
-        
+
     def __len__(self):
         return len(self.features)
-        
+
     def __getitem__(self, idx):
-        # 1D CNN expects shape: [channels, length] -> [1, 1000]
         x = self.features[idx]
-        x = np.expand_dims(x, axis=0) 
-        
+        x = np.expand_dims(x, axis=0)
+
         return {
             "feature": torch.tensor(x, dtype=torch.float32),
             "label": torch.tensor(self.labels[idx], dtype=torch.long)
         }
+
 
 class OptimizedPacketCNN(LightningModule):
     def __init__(self, output_dim=6, signal_length=1000, learning_rate=0.001):
@@ -33,7 +63,6 @@ class OptimizedPacketCNN(LightningModule):
         self.save_hyperparameters()
         self.learning_rate = learning_rate
 
-        # First convolutional block
         self.conv1 = nn.Sequential(
             nn.Conv1d(in_channels=1, out_channels=512, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm1d(512),
@@ -41,7 +70,6 @@ class OptimizedPacketCNN(LightningModule):
             nn.MaxPool1d(kernel_size=2)
         )
 
-        # Second convolutional block
         self.conv2 = nn.Sequential(
             nn.Conv1d(in_channels=512, out_channels=256, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm1d(256),
@@ -49,13 +77,11 @@ class OptimizedPacketCNN(LightningModule):
             nn.MaxPool1d(kernel_size=2)
         )
 
-        # Automatic calculation of input features for dense layers
         dummy_x = torch.rand(1, 1, self.hparams.signal_length, requires_grad=False)
         dummy_x = self.conv1(dummy_x)
         dummy_x = self.conv2(dummy_x)
         max_pool_out = dummy_x.view(1, -1).shape[1]
 
-        # Fully connected layers (Classifier with 0.5 dropout)
         self.fc = nn.Sequential(
             nn.Linear(in_features=max_pool_out, out_features=128),
             nn.BatchNorm1d(128),
@@ -67,7 +93,6 @@ class OptimizedPacketCNN(LightningModule):
             nn.Dropout(p=0.5)
         )
 
-        # Output layer (Logits)
         self.out = nn.Linear(in_features=32, out_features=self.hparams.output_dim)
 
     def forward(self, x):
@@ -94,8 +119,17 @@ class OptimizedPacketCNN(LightningModule):
         preds = torch.argmax(y_hat, dim=1)
         acc = (preds == y).float().mean()
 
+        from sklearn.metrics import f1_score
+        f1 = f1_score(
+            y.cpu().numpy(),
+            preds.cpu().numpy(),
+            average="macro",
+            zero_division=0
+        )
+
         self.log("val_loss", loss, prog_bar=True, on_epoch=True)
         self.log("val_acc", acc, prog_bar=True, on_epoch=True)
+        self.log("val_f1_macro", torch.tensor(f1), prog_bar=True, on_epoch=True)
         return loss
 
     def configure_optimizers(self):
