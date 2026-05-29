@@ -5,7 +5,7 @@ from scapy.layers.inet import IP
 
 INTERFACE = None
 DIR_FOR_SAVING = "traffic_logs"
-BRF_FILTER = "ip"
+BRF_FILTER = "ip or ipv6"
 CHECK_INTERVAL = 1000000
 
 if not os.path.exists(DIR_FOR_SAVING):

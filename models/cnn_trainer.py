@@ -36,6 +36,7 @@ class OptimizedPacketCNN(LightningModule):
         # First convolutional block
         self.conv1 = nn.Sequential(
             nn.Conv1d(in_channels=1, out_channels=512, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm1d(512),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
@@ -43,6 +44,7 @@ class OptimizedPacketCNN(LightningModule):
         # Second convolutional block
         self.conv2 = nn.Sequential(
             nn.Conv1d(in_channels=512, out_channels=256, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
@@ -56,9 +58,11 @@ class OptimizedPacketCNN(LightningModule):
         # Fully connected layers (Classifier with 0.5 dropout)
         self.fc = nn.Sequential(
             nn.Linear(in_features=max_pool_out, out_features=128),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(p=0.5),
             nn.Linear(in_features=128, out_features=32),
+            nn.BatchNorm1d(32),
             nn.ReLU(),
             nn.Dropout(p=0.5)
         )
