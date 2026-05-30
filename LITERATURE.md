@@ -16,6 +16,8 @@ This document maintains a curated list of academic papers, datasets, and technic
 
 ### 6. [A review on machine learning–based approaches for Internet traffic classification](https://link.springer.com/article/10.1007/s12243-020-00770-7?fbclid=IwY2xjawQw7oFleHRuA2FlbQIxMABicmlkETB2TFpTSk5xd0JacHc4T0tFc3J0YwZhcHBfaWQQMjIyMDM5MTc4ODIwMDg5MgABHvz5Z9Fj7t7hpVTWDX_LI4JUdSDX6TirxQgkeklifv5l7IUxN4wqRz-n-QeC_aem_EEDyFFvHjCyWs-dSOPYMjw)
 
+### 7. [Trenuj lepsze modele Uczenia Maszynowego za pomocą Hyperopt](https://bulldogjob.pl/readme/trenuj-lepsze-modele-uczenia-maszynowego-za-pomoca-hyperopt)
+
 ## Datasets (backup)
 
 ### 1. [Traffic dataset USTC-TFC2016](https://github.com/davidyslu/USTC-TFC2016)
