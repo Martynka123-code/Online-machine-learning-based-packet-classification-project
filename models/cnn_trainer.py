@@ -1,9 +1,31 @@
 # models/cnn_trainer.py
+import numpy as np
 import torch
 from torch import nn as nn
 from torch.nn import functional as F
+from torch.utils.data import Dataset
 from pytorch_lightning import LightningModule
 
+class PacketByteDataset(Dataset):
+    def __init__(self, npz_path):
+        print(f"[*] Loading CNN dataset into memory from: {npz_path}")
+        data = np.load(npz_path)
+        self.features = data['features']
+        self.labels = data['labels']
+        print(f"[+] Loaded {len(self.features)} packets.")
+        
+    def __len__(self):
+        return len(self.features)
+        
+    def __getitem__(self, idx):
+        # 1D CNN expects shape: [channels, length] -> [1, 1000]
+        x = self.features[idx]
+        x = np.expand_dims(x, axis=0) 
+        
+        return {
+            "feature": torch.tensor(x, dtype=torch.float32),
+            "label": torch.tensor(self.labels[idx], dtype=torch.long)
+        }
 
 class OptimizedPacketCNN(LightningModule):
     def __init__(self, output_dim=6, signal_length=1000, learning_rate=0.001):
@@ -11,53 +33,37 @@ class OptimizedPacketCNN(LightningModule):
         self.save_hyperparameters()
         self.learning_rate = learning_rate
 
-        # Pierwszy blok konwolucyjny (z zapożyczoną konfiguracją 512 filtrów, stride=2)
+        # First convolutional block
         self.conv1 = nn.Sequential(
-            nn.Conv1d(
-                in_channels=1,
-                out_channels=512,
-                kernel_size=3,
-                stride=2,
-                padding=1
-            ),
-            nn.BatchNorm1d(512),
+            nn.Conv1d(in_channels=1, out_channels=512, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
 
-        # Drugi blok konwolucyjny (256 filtrów, stride=2)
+        # Second convolutional block
         self.conv2 = nn.Sequential(
-            nn.Conv1d(
-                in_channels=512,
-                out_channels=256,
-                kernel_size=3,
-                stride=2,
-                padding=1
-            ),
-            nn.BatchNorm1d(256),
+            nn.Conv1d(in_channels=512, out_channels=256, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
 
-        # Automatyczne wyliczenie rozmiaru wejściowego dla warstw gęstych (Trik z dummy_x)
+        # Automatic calculation of input features for dense layers
         dummy_x = torch.rand(1, 1, self.hparams.signal_length, requires_grad=False)
         dummy_x = self.conv1(dummy_x)
         dummy_x = self.conv2(dummy_x)
         max_pool_out = dummy_x.view(1, -1).shape[1]
 
-        # Warstwy w pełni połączone (Klasyfikator gęsty z dropoutem 0.5 )
+        # Fully connected layers (Classifier with 0.5 dropout)
         self.fc = nn.Sequential(
             nn.Linear(in_features=max_pool_out, out_features=128),
-            nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(p=0.5),
             nn.Linear(in_features=128, out_features=32),
-            nn.BatchNorm1d(32),
             nn.ReLU(),
             nn.Dropout(p=0.5)
         )
 
-        # Warstwa wyjściowa (Logits)
+        # Output layer (Logits)
         self.out = nn.Linear(in_features=32, out_features=self.hparams.output_dim)
 
     def forward(self, x):

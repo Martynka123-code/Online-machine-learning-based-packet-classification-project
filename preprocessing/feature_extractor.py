@@ -1,96 +1,215 @@
-# preprocessing/feature_extractor.py
-import os
-import numpy as np
-import pandas as pd
-from scapy.all import rdpcap
-from scapy.layers.inet import IP, TCP, UDP
 import warnings
 
-warnings.filterwarnings('ignore')  # Suppress Scapy's warnings
+warnings.filterwarnings("ignore")
+
+from preprocessing.direction import split_by_direction
+from preprocessing.statistics import direction_features
+from preprocessing.tcp_features import (
+    tcp_flag_counts,
+    retransmission_count,
+)
+from preprocessing.burst import burst_features
+from preprocessing.offline_processor import OfflineProcessor
+# Dodajemy import funkcji wyciągającej klucz przepływu
+from preprocessing.flow_keys import get_flow_key
 
 
 class FlowFeatureExtractor:
-    def __init__(self, pcap_path, label, granularity = 100):
+    """
+    Main feature extraction class.
+
+    Supports:
+    - offline PCAP -> CSV extraction
+    - online live packet classification
+    - packet aggregation
+    - time aggregation
+    """
+
+    def __init__(
+            self,
+            pcap_path=None,
+            label=None,
+            agg_mode="packet",
+            agg_value=100
+    ):
+
         self.pcap_path = pcap_path
         self.label = label
-        self.granularity = granularity
-        self.flows = {}
-        self.dataset = []
+        self.agg_mode = agg_mode
+        self.agg_value = agg_value
+
+    # ------------------------------------------------------------------
+    # Compatibility for ONLINE mode (Sniffer)
+    # ------------------------------------------------------------------
 
     def _get_flow_key(self, packet):
-        """Returns a direction-agnostic 5-tuple flow key (src_ip, dst_ip, src_port, dst_port, proto).
-        Sorting IPs and ports ensures the same key regardless of packet direction."""
-        if not packet.haslayer(IP): return None
-        ip_layer = packet[IP]
-        proto = ip_layer.proto
-        if packet.haslayer(TCP):
-            sport, dport = packet[TCP].sport, packet[TCP].dport
-        elif packet.haslayer(UDP):
-            sport, dport = packet[UDP].sport, packet[UDP].dport
-        else:
-            return None
+        """
+        Compatibility method for online sniffer.
+        Delegates to the standalone get_flow_key function.
+        """
+        return get_flow_key(packet)
 
-        ips = tuple(sorted([ip_layer.src, ip_layer.dst]))
-        ports = tuple(sorted([sport, dport]))
-        return (ips[0], ips[1], ports[0], ports[1], proto)
+    # ------------------------------------------------------------------
+    # Main feature engineering
+    # ------------------------------------------------------------------
 
-    def _get_payload_length(self, packet):
-        """Returns the payload length in bytes."""
-        if packet.haslayer(TCP) and packet[TCP].payload:
-            return len(packet[TCP].payload)
-        elif packet.haslayer(UDP) and packet[UDP].payload:
-            return len(packet[UDP].payload)
-        return 0
+    def calculate_features(self, packets):
 
-    def _calculate_features(self, packets):
-        """Computes statistical features from a fixed-size packet window.
-        IP and MAC addresses are not included to keep the feature set anonymous."""
-        pkt_lengths = [len(p) for p in packets]
-        payload_lengths = [self._get_payload_length(p) for p in packets]
-        iats = [float(packets[i].time - packets[i - 1].time) for i in range(1, len(packets))]
-        if not iats: iats = [0.0]
+        fwd_packets, bwd_packets = split_by_direction(
+            packets
+        )
 
-        iat_mean = np.mean(iats)
-        iat_std = np.std(iats)
-        iat_cov = (iat_std / iat_mean) if iat_mean > 0 else 0.0
+        features = {}
 
-        features = {
-            "pkt_len_max": np.max(pkt_lengths),
-            "pkt_len_std": np.std(pkt_lengths),
-            "pkt_len_p50": np.percentile(pkt_lengths, 50),
-            "pkt_len_p75": np.percentile(pkt_lengths, 75),
-            "payload_median": np.median(payload_lengths),
-            "iat_std": iat_std,
-            "iat_p75_minus_p50": np.percentile(iats, 75) - np.median(iats),
-            "iat_p95_minus_p50": np.percentile(iats, 95) - np.median(iats),
-            "iat_cov_std_mean": iat_cov,
-            "iat_median": np.median(iats),
-            "granularity": self.granularity,
-            "label": self.label
-        }
+        # --------------------------------------------------------------
+        # Directional statistics
+        # --------------------------------------------------------------
+
+        features.update(
+            direction_features(
+                fwd_packets,
+                "fwd"
+            )
+        )
+
+        features.update(
+            direction_features(
+                bwd_packets,
+                "bwd"
+            )
+        )
+
+        # --------------------------------------------------------------
+        # Upload / download ratios
+        # --------------------------------------------------------------
+
+        fwd_bytes = sum(
+            len(packet)
+            for packet in fwd_packets
+        )
+
+        bwd_bytes = sum(
+            len(packet)
+            for packet in bwd_packets
+        )
+
+        total_bytes = fwd_bytes + bwd_bytes
+
+        features["bytes_ratio_fwd"] = (
+            fwd_bytes / total_bytes
+            if total_bytes > 0 else 0.5
+        )
+
+        features["pkt_ratio_fwd"] = (
+            len(fwd_packets) / len(packets)
+            if packets else 0.5
+        )
+
+        # --------------------------------------------------------------
+        # TCP flag statistics
+        # --------------------------------------------------------------
+
+        flag_counts = tcp_flag_counts(
+            packets
+        )
+
+        packet_count = max(
+            len(packets),
+            1
+        )
+
+        for flag, count in flag_counts.items():
+            features[
+                f"tcp_{flag.lower()}_ratio"
+            ] = count / packet_count
+
+        # --------------------------------------------------------------
+        # TCP retransmissions
+        # --------------------------------------------------------------
+
+        features["tcp_retrans_ratio"] = (
+                retransmission_count(packets)
+                / packet_count
+        )
+
+        # --------------------------------------------------------------
+        # Burst detection
+        # --------------------------------------------------------------
+
+        features.update(
+            burst_features(packets)
+        )
+        # --------------------------------------------------------------
+        # Transport Protocol Ratios (UDP)
+        # --------------------------------------------------------------
+        udp_count = 0
+        for packet in packets:
+            # Zakładając, że 'packets' to lista obiektów pakietów z biblioteki Scapy
+            if packet.haslayer("UDP"):
+                udp_count += 1
+
+        features["udp_ratio"] = udp_count / packet_count
+
+        # --------------------------------------------------------------
+        # Metadata
+        # --------------------------------------------------------------
+
+        features[
+            "actual_packets_in_flow"
+        ] = len(packets)
+
+        features["agg_mode"] = (
+            self.agg_mode
+        )
+
+        features["agg_value"] = (
+            self.agg_value
+        )
+
+        if self.label is not None:
+            features["label"] = self.label
+
         return features
 
-    def process_and_save(self, output_csv):
-        """Extracts features from a pcap file and append results to a csv file."""
-        print(f"[*] Extracting features from: {self.pcap_path} | Granularity: {self.granularity}")
-        packets = rdpcap(self.pcap_path)
+    # ------------------------------------------------------------------
+    # Compatibility layer for ONLINE mode
+    # ------------------------------------------------------------------
 
-        for pkt in packets:
-            flow_key = self._get_flow_key(pkt)
-            if not flow_key: continue
+    def _calculate_features(self, packets):
+        """
+        Backward compatibility wrapper.
 
-            if flow_key not in self.flows: self.flows[flow_key] = []
-            self.flows[flow_key].append(pkt)
+        Your old main.py calls:
+            extractor._calculate_features(...)
 
-            if len(self.flows[flow_key]) == self.granularity:
-                self.dataset.append(self._calculate_features(self.flows[flow_key]))
-                self.flows[flow_key] = []  # Reset window for the next aggregate.
+        so we keep this method.
+        """
 
-        if not self.dataset:
-            print("[!] No enough number of packets to set a single aggregate.")
-            return
+        return self.calculate_features(
+            packets
+        )
 
-        df = pd.DataFrame(self.dataset).round(5)
-        file_exists = os.path.isfile(output_csv)
-        df.to_csv(output_csv, mode='a', header=not file_exists, index=False)
-        print(f"[+] Saved {len(self.dataset)} aggregates to {output_csv}")
+    # ------------------------------------------------------------------
+    # Offline PCAP -> CSV extraction
+    # ------------------------------------------------------------------
+
+    def process_and_save(
+            self,
+            output_csv,
+            batch_size=10000
+    ):
+
+        if self.pcap_path is None:
+            raise ValueError(
+                "pcap_path cannot be None "
+                "during offline extraction."
+            )
+
+        processor = OfflineProcessor(
+            extractor=self
+        )
+
+        processor.process_and_save(
+            output_csv=output_csv,
+            batch_size=batch_size
+        )

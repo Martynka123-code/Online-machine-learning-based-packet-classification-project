@@ -2,3 +2,7 @@
 archive/traffic_logs/
 data/raw_pcaps
 .idea
+traffic_logs/traffic_2026-03-13.pcap
+__pycache__
+data/cnn_datasets/
+lightning_logs/
