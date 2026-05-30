@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import time
 import threading
@@ -96,7 +97,7 @@ def menu_extract_features_cnn():
         preprocessor.process_pcap(pcap_path, label_idx)
 
     # 4. Save everything into one combined master dataset file
-    output_npz = os.path.join(DATA_CNN_DIR, "cnn_dataset_master.npz")
+    output_npz = os.path.join(DATA_CNN_DIR, f"cnn_dataset_{datetime.now().strftime('%Y-%m-%d')}_master.npz")
     preprocessor.save_dataset(output_npz)
 
 
