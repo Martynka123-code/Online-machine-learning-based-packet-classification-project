@@ -64,15 +64,15 @@ class OptimizedPacketCNN(LightningModule):
         self.learning_rate = learning_rate
 
         self.conv1 = nn.Sequential(
-            nn.Conv1d(in_channels=1, out_channels=512, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm1d(512),
+            nn.Conv1d(in_channels=1, out_channels=100, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm1d(100),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
 
         self.conv2 = nn.Sequential(
-            nn.Conv1d(in_channels=512, out_channels=256, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm1d(256),
+            nn.Conv1d(in_channels=100, out_channels=50, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm1d(50),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
@@ -83,17 +83,17 @@ class OptimizedPacketCNN(LightningModule):
         max_pool_out = dummy_x.view(1, -1).shape[1]
 
         self.fc = nn.Sequential(
-            nn.Linear(in_features=max_pool_out, out_features=128),
-            nn.BatchNorm1d(128),
+            nn.Linear(in_features=max_pool_out, out_features=25),
+            nn.BatchNorm1d(25),
             nn.ReLU(),
             nn.Dropout(p=0.5),
-            nn.Linear(in_features=128, out_features=32),
-            nn.BatchNorm1d(32),
+            nn.Linear(in_features=25, out_features=10),
+            nn.BatchNorm1d(10),
             nn.ReLU(),
             nn.Dropout(p=0.5)
         )
 
-        self.out = nn.Linear(in_features=32, out_features=self.hparams.output_dim)
+        self.out = nn.Linear(in_features=10, out_features=self.hparams.output_dim)
 
     def forward(self, x):
         x = self.conv1(x)

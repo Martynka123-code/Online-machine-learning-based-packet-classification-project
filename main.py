@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+import torch
 import queue
 import json
 from scapy.all import sniff
@@ -138,7 +139,7 @@ def menu_train_models():
             print(f"Granularity {g:3}: Accuracy {a:.2%}")
         plot_granularity_comparison(results)
 
- def menu_train_cnn_models():
+def menu_train_cnn_models():
     """Option 6: Train CNN models using PyTorch Lightning with raw byte datasets."""
     print("\n--- CNN Model Training (PyTorch Lightning) ---")
 
