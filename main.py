@@ -227,9 +227,25 @@ def menu_train_cnn_models():
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(y.cpu().numpy())
                 
-        print("\n--- Szegółowy Raport Klasyfikacji ---")
-        print(classification_report(all_labels, all_preds, target_names=target_names, zero_division=0))
+        print("\n--- Szczegółowy Raport Klasyfikacji ---")
         
+        # 1. Sprawdź, jakie ID klas FAKTYCZNIE wystąpiły w zbiorze walidacyjnym
+        present_classes_ids = np.unique(all_labels)
+        
+        # 2. Przefiltruj target_names tak, aby odpowiadały tylko obecnym klasom
+        filtered_target_names = [target_names[i] for i in present_classes_ids if i < len(target_names)]
+        
+        # 3. Przekaż jawnie argument 'labels', aby ograniczyć raport do obecnych klas
+        print(classification_report(
+            all_labels, 
+            all_preds, 
+            labels=present_classes_ids, 
+            target_names=filtered_target_names, 
+            zero_division=0
+        ))
+        
+        # Wywołanie Twojej macierzy pomyłek powinno teraz przejść bez problemu,
+        # ponieważ Twoja funkcja plot_confusion_matrix wewnętrznie już próbuje filtrować klasy przez unique_in_true
         plot_confusion_matrix(all_labels, all_preds, labels=target_names, reports_dir="reports", tag="cnn_val")
         
         try:

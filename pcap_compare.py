@@ -572,7 +572,14 @@ def main():
 
     # Drop metadata columns that aren't features
     drop_cols = {"label", "actual_packets_in_flow", "agg_mode", "agg_value"}
-    feat_cols = [c for c in df_all.columns if c not in drop_cols and df_all[c].dtype != object]
+    
+    # Zostawiamy tylko cechy zawierające 'bwd' oraz ogólne statystyki transmisji, usuwając 'fwd'
+    feat_cols = [
+        c for c in df_all.columns 
+        if c not in drop_cols 
+        and df_all[c].dtype != object 
+        and not c.startswith("fwd_")  # <--- To blokuje cechy wychodzące!
+    ]
 
     print(f"\n[*] Total flow aggregates : {len(df_all):,}")
     print(f"[*] Classes               : {sorted(df_all['label'].unique())}")
