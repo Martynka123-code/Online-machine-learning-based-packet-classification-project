@@ -29,8 +29,8 @@ class PacketByteDataset(Dataset):
 
 class OptimizedPacketCNN(LightningModule):
     # Udostępniamy parametry w konstruktorze z bezpiecznymi domyślnymi wartościami
-    def __init__(self, output_dim=5, signal_length=1000, learning_rate=0.001,
-                 conv1_filters=80, conv2_filters=40, kernel_size=3, dropout=0.5):
+    def __init__(self, output_dim=5, signal_length=1000, learning_rate=0.0049,
+                 conv1_filters = 80, conv2_filters = 40, kernel_size = 2, dropout = 0.17):
         super().__init__()
         self.save_hyperparameters()
         self.learning_rate = learning_rate

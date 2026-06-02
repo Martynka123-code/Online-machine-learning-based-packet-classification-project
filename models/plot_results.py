@@ -22,9 +22,9 @@ def analyze_hyperopt_results():
     dropouts = [t['misc']['vals']['dropout'][0] for t in successful_trials]
 
     # Define option lists exactly as defined in the 'space' dictionary
-    batch_size_options = [16, 32, 64, 128]
-    kernel_size_options = [2, 3, 5, 7]
-    filter_options = ["32->16", "48->24", "64->32", "80->40"]
+    batch_size_options = [16, 32, 64, 128, 256, 512]
+    kernel_size_options = [2, 3, 5, 7, 9]
+    filter_options = ["32->16", "48->24", "64->32", "80->40", "100->50"]
 
     batch_sizes = [batch_size_options[t['misc']['vals']['batch_size'][0]] for t in successful_trials]
     kernel_sizes = [kernel_size_options[t['misc']['vals']['kernel_size'][0]] for t in successful_trials]

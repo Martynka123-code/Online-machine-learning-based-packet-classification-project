@@ -20,10 +20,11 @@ space = {
         {'c1': 32, 'c2': 16},
         {'c1': 48, 'c2': 24},
         {'c1': 64, 'c2': 32},
-        {'c1': 80, 'c2': 40}
+        {'c1': 80, 'c2': 40},
+        {'c1': 100, 'c2': 50}
     ]),
-    'kernel_size': hp.choice('kernel_size', [2, 3, 5, 7]),
-    'batch_size': hp.choice('batch_size', [16, 32, 64, 128])
+    'kernel_size': hp.choice('kernel_size', [2, 3, 5, 7, 9]),
+    'batch_size': hp.choice('batch_size', [16, 32, 64, 128, 256, 512])
 }
 
 # Load the full dataset into memory before starting the Hyperopt loop
@@ -54,7 +55,7 @@ def objective(params):
     early_stop = EarlyStopping(monitor="val_loss", mode="min", patience=2)
 
     trainer = Trainer(
-        max_epochs = 5,
+        max_epochs = 4,
         accelerator = "auto",
         callbacks = [early_stop],
         enable_progress_bar = True,
@@ -82,7 +83,7 @@ if __name__ == "__main__":
         fn = objective,
         space = space,
         algo = tpe.suggest,
-        max_evals = 10,
+        max_evals = 8,
         trials = trials
     )
 

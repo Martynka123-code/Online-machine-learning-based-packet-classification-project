@@ -166,8 +166,8 @@ def menu_train_cnn_models():
         val_size = len(full_dataset) - train_size
         train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
 
-        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=0)
-        val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=0)
+        train_loader = DataLoader(train_dataset, batch_size = 64, shuffle = True, num_workers = 0)
+        val_loader = DataLoader(val_dataset, batch_size = 64, shuffle = False, num_workers = 0)
     except Exception as e:
         print(f"[ERROR] Failed to prepare DataLoaders: {e}")
         return
