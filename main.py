@@ -6,6 +6,11 @@ import json
 from scapy.all import sniff
 import numpy as np
 
+from pytorch_lightning.loggers import CSVLogger
+from sklearn.metrics import classification_report
+
+from visualization.confusion_matrix_plot import plot_confusion_matrix
+
 # Import configuration and custom modules
 from config import DATA_CNN_DIR, DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
 from models.cnn_online import CNNOnline
@@ -143,7 +148,6 @@ def menu_train_cnn_models():
     """Option 6: Train CNN models using PyTorch Lightning with raw byte datasets."""
     print("\n--- CNN Model Training (PyTorch Lightning) ---")
 
-    # 1. List available .npz datasets in data/processed_csv/
     files = [f for f in os.listdir(DATA_CNN_DIR) if f.endswith('.npz')]
     if not files:
         print(f"[!] No CNN datasets (.npz) found in {DATA_CNN_DIR}. Run CNN feature extraction first.")
@@ -166,8 +170,8 @@ def menu_train_cnn_models():
         val_size = len(full_dataset) - train_size
         train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
 
-        train_loader = DataLoader(train_dataset, batch_size = 64, shuffle = True, num_workers = 0)
-        val_loader = DataLoader(val_dataset, batch_size = 64, shuffle = False, num_workers = 0)
+        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=0)
+        val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=0)
     except Exception as e:
         print(f"[ERROR] Failed to prepare DataLoaders: {e}")
         return
@@ -184,21 +188,59 @@ def menu_train_cnn_models():
 
     model = OptimizedPacketCNN(output_dim=output_dim, signal_length=1000)
 
+    logger = CSVLogger("lightning_logs", name="cnn_training")
+    
     print("\n[*] Starting PyTorch Lightning Training Session...")
-    trainer = Trainer(max_epochs=epochs, accelerator="auto", devices=1)
+    trainer = Trainer(max_epochs=epochs, accelerator="auto", devices=1, logger=logger)
 
     try:
         trainer.fit(model, train_loader, val_loader)
 
-        # 5. Save the trained checkpoint
+        # 2. Zapisz model
         model_base_name = os.path.splitext(dataset_file)[0].replace("cnn_dataset_", "")
         model_save_path = os.path.join(MODELS_DIR, f"cnn_model_{model_base_name}.ckpt")
         trainer.save_checkpoint(model_save_path)
         print(f"\n[+] CNN Training complete! Checkpoint saved to: {model_save_path}")
 
+        print("\n[*] Trwa generowanie wykresów i raportów...")
+        import torch
+        
+        map_path = os.path.join(DATA_CSV_DIR, "cnn_class_map.json")
+        target_names = [f"Klasa {i}" for i in range(output_dim)] # Wartości domyślne
+        if os.path.exists(map_path):
+            with open(map_path, 'r') as f:
+                class_map = json.load(f)
+            idx_to_app = {v: k for k, v in class_map.items()}
+            target_names = [idx_to_app.get(i, f"Klasa {i}") for i in range(output_dim)]
+
+        model.eval()
+        all_preds = []
+        all_labels = []
+        
+        with torch.no_grad():
+            for batch in val_loader:
+                x = batch["feature"].to(model.device)
+                y = batch["label"].to(model.device)
+                y_hat = model(x)
+                preds = torch.argmax(y_hat, dim=1)
+                
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(y.cpu().numpy())
+                
+        print("\n--- Szegółowy Raport Klasyfikacji ---")
+        print(classification_report(all_labels, all_preds, target_names=target_names, zero_division=0))
+        
+        plot_confusion_matrix(all_labels, all_preds, labels=target_names, reports_dir="reports", tag="cnn_val")
+        
+        try:
+            from visualization.cnn_history_plot import plot_training_history
+            metrics_csv_path = f"{logger.log_dir}/metrics.csv"
+            plot_training_history(metrics_csv_path)
+        except ImportError:
+            print("[!] Pomięto rysowanie krzywych uczenia (brak pliku visualization/cnn_history_plot.py)")
+
     except Exception as e:
         print(f"[!] Training interrupted or failed: {e}")
-
 
 def menu_online_mode():
     """Option 5: Live classification with asynchronous packet processing buffer."""
