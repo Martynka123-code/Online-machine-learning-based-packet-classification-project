@@ -5,9 +5,10 @@ DATA_RAW_DIR = "data/raw_pcaps/"
 DATA_CSV_DIR = "data/processed_csv/"
 MODELS_DIR = "data/saved_models/"
 DATA_CNN_DIR = "data/cnn_datasets/"
+DATA_TEST_DIR = "data/test_pcaps/"
 
 # Creating directories if they do not exist
-for d in [DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, DATA_CNN_DIR]:
+for d in [DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, DATA_CNN_DIR,DATA_TEST_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # Feature extraction settings

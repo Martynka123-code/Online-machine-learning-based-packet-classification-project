@@ -19,6 +19,8 @@ from torch.utils.data import DataLoader, random_split
 from pytorch_lightning import Trainer
 from models.cnn_trainer import OptimizedPacketCNN, PacketByteDataset
 from visualization.rf_visualizer import plot_granularity_comparison
+from evaluation.batch_evaluator import menu_batch_evaluation
+
 
 
 def menu_collect_data():
@@ -387,28 +389,21 @@ def main():
         print(" 5. Train Random Forest Models")
         print(" 6. Train CNN Models (PyTorch Lightning)")
         print(" 7. Run Online Classification (Live) [Random Forest]")
-        print(" 8. Run Online Classification (Live) [CNN]")  # <--- DODANE
+        print(" 8. Run Online Classification (Live) [CNN]")
+        print(" 9. Offline Batch Evaluation (RF / CNN)")   # <-- NOWE
         print(" 0. Exit")
-
+ 
         cmd = input("\nSelect option: ").strip()
-        if cmd == '1':
-            menu_collect_data()
-        elif cmd == '2':
-            menu_extract_features()
-        elif cmd == '3':
-            menu_extract_features_cnn()
-        elif cmd == '4':
-            menu_validate_datasets()
-        elif cmd == '5':
-            menu_train_models()
-        elif cmd == '6':
-            menu_train_cnn_models()
-        elif cmd == '7':
-            menu_online_mode()
-        elif cmd == '8':
-            menu_online_mode_cnn()  # <--- PODPIĘCIE FUNKCJI
-        elif cmd == '0':
-            break
+        if   cmd == '1': menu_collect_data()
+        elif cmd == '2': menu_extract_features()
+        elif cmd == '3': menu_extract_features_cnn()
+        elif cmd == '4': menu_validate_datasets()
+        elif cmd == '5': menu_train_models()
+        elif cmd == '6': menu_train_cnn_models()
+        elif cmd == '7': menu_online_mode()
+        elif cmd == '8': menu_online_mode_cnn()
+        elif cmd == '9': menu_batch_evaluation()           # <-- NOWE
+        elif cmd == '0': break
 
 
 if __name__ == "__main__":

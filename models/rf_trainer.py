@@ -76,7 +76,7 @@ class RandomForestTrainer:
                 return None, None, None
 
             drop_cols = [
-                c for c in ["label", "granularity", "agg_mode", "agg_value"]
+                c for c in ["label", "granularity", "agg_mode", "agg_value", "actual_packets_in_flow"]
                 if c in df.columns
             ]
 
@@ -213,7 +213,7 @@ class RandomForestTrainer:
 
         # --------------------------------------------------
         # HYPERPARAMETER SEARCH
-        # --------------------------------------------------
+        # --------------------------------------------------    
         rf = RandomForestClassifier(
             class_weight=class_weights,
             random_state=32,
