@@ -58,13 +58,15 @@ class OptimizedPacketCNN(LightningModule):
         self.learning_rate = learning_rate
 
         self.conv1 = nn.Sequential(
-            nn.Conv1d(in_channels=1, out_channels=512, kernel_size=3, stride=2, padding=1),
+            nn.Conv1d(in_channels=1, out_channels=conv1_filters,
+                      kernel_size=kernel_size, stride=2, padding=padding),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
 
         self.conv2 = nn.Sequential(
-            nn.Conv1d(in_channels=512, out_channels=256, kernel_size=3, stride=2, padding=1),
+            nn.Conv1d(in_channels=conv1_filters, out_channels=conv2_filters,
+                      kernel_size=kernel_size, stride=2, padding=padding),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
@@ -82,7 +84,7 @@ class OptimizedPacketCNN(LightningModule):
             nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(p=0.5),
-            nn.Linear(in_features=128, out_features=32),
+            nn.Linear(in_features=64, out_features=32),
             nn.ReLU(),
             nn.Dropout(p=dropout)
         )
