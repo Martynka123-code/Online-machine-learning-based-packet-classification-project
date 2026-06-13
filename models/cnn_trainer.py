@@ -1,10 +1,40 @@
-# models/cnn_trainer.py
 import numpy as np
 import torch
 from torch import nn as nn
 from torch.nn import functional as F
 from torch.utils.data import Dataset
-from pytorch_lightning import LightningModule
+from pytorch_lightning import LightningModule, Callback
+
+
+class MetricsCallback(Callback):
+    """
+    Lightweight callback — collects per-epoch train/val metrics.
+    Pass an instance to Trainer(callbacks=[...]).
+    Access results via .history after training.
+    """
+
+    def __init__(self):
+        self.history = {
+            "train_loss": [],
+            "val_loss": [],
+            "val_acc": [],
+            "val_f1_macro": [],
+        }
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        logged = trainer.callback_metrics
+        if "train_loss" in logged:
+            self.history["train_loss"].append(float(logged["train_loss"]))
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        logged = trainer.callback_metrics
+        if "val_loss" in logged:
+            self.history["val_loss"].append(float(logged["val_loss"]))
+        if "val_acc" in logged:
+            self.history["val_acc"].append(float(logged["val_acc"]))
+        if "val_f1_macro" in logged:
+            self.history["val_f1_macro"].append(float(logged["val_f1_macro"]))
+
 
 class PacketByteDataset(Dataset):
     def __init__(self, npz_path):
@@ -13,19 +43,19 @@ class PacketByteDataset(Dataset):
         self.features = data['features']
         self.labels = data['labels']
         print(f"[+] Loaded {len(self.features)} packets.")
-        
+
     def __len__(self):
         return len(self.features)
-        
+
     def __getitem__(self, idx):
-        # 1D CNN expects shape: [channels, length] -> [1, 1000]
         x = self.features[idx]
-        x = np.expand_dims(x, axis=0) 
-        
+        x = np.expand_dims(x, axis=0)
+
         return {
             "feature": torch.tensor(x, dtype=torch.float32),
             "label": torch.tensor(self.labels[idx], dtype=torch.long)
         }
+
 
 class OptimizedPacketCNN(LightningModule):
     # Udostępniamy parametry w konstruktorze z bezpiecznymi domyślnymi wartościami
@@ -35,54 +65,39 @@ class OptimizedPacketCNN(LightningModule):
         self.save_hyperparameters()
         self.learning_rate = learning_rate
 
-        # Pierwszy blok konwolucyjny
+        # First convolutional block
         self.conv1 = nn.Sequential(
-            nn.Conv1d(
-                in_channels=1,
-                out_channels=conv1_filters,
-                kernel_size=kernel_size,
-                stride=2,
-                padding=kernel_size // 2  # Dynamiczny padding chroniący przed błędem wymiaru
-            ),
-            nn.BatchNorm1d(conv1_filters),
+            nn.Conv1d(in_channels=1, out_channels=512, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
 
-        # Drugi blok konwolucyjny
+        # Second convolutional block
         self.conv2 = nn.Sequential(
-            nn.Conv1d(
-                in_channels=conv1_filters,
-                out_channels=conv2_filters,
-                kernel_size=kernel_size,
-                stride=2,
-                padding=kernel_size // 2
-            ),
-            nn.BatchNorm1d(conv2_filters),
+            nn.Conv1d(in_channels=512, out_channels=256, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2)
         )
 
-        # Trik z dummy_x automatycznie dostosuje wielkość warstwy liniowej
+        # Automatic calculation of input features for dense layers
         dummy_x = torch.rand(1, 1, self.hparams.signal_length, requires_grad=False)
         dummy_x = self.conv1(dummy_x)
         dummy_x = self.conv2(dummy_x)
         max_pool_out = dummy_x.view(1, -1).shape[1]
 
-        # Warstwy w pełni połączone (Klasyfikator gęsty z poprawnym BatchNorm)
+        # Fully connected layers (Classifier with 0.5 dropout)
         self.fc = nn.Sequential(
             nn.Linear(in_features=max_pool_out, out_features=25),
             nn.BatchNorm1d(25),
             nn.ReLU(),
-            nn.Dropout(p=dropout),
-            nn.Linear(in_features=25, out_features=10),
-            nn.BatchNorm1d(10),
+            nn.Dropout(p=0.5),
+            nn.Linear(in_features=128, out_features=32),
             nn.ReLU(),
             nn.Dropout(p=dropout)
         )
 
-        # Warstwa wyjściowa
-        self.out = nn.Linear(in_features=10, out_features=self.hparams.output_dim)
+        # Output layer (Logits)
+        self.out = nn.Linear(in_features=32, out_features=self.hparams.output_dim)
 
     def forward(self, x):
         x = self.conv1(x)
@@ -107,15 +122,6 @@ class OptimizedPacketCNN(LightningModule):
         loss = F.cross_entropy(y_hat, y)
         preds = torch.argmax(y_hat, dim=1)
         acc = (preds == y).float().mean()
-
-        # Obliczanie F1-Macro (Twoja implementacja)
-        from sklearn.metrics import f1_score
-        f1 = f1_score(
-            y.cpu().numpy(),
-            preds.cpu().numpy(),
-            average="macro",
-            zero_division=0
-        )
 
         self.log("val_loss", loss, prog_bar=True, on_epoch=True)
         self.log("val_acc", acc, prog_bar=True, on_epoch=True)

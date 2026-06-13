@@ -189,75 +189,21 @@ def menu_train_cnn_models():
 
     model = OptimizedPacketCNN(output_dim=output_dim, signal_length=1000)
 
-    logger = CSVLogger("lightning_logs", name="cnn_training")
-    
     print("\n[*] Starting PyTorch Lightning Training Session...")
-    trainer = Trainer(max_epochs=epochs, accelerator="auto", devices=1, logger=logger)
+    trainer = Trainer(max_epochs=epochs, accelerator="auto", devices=1)
 
     try:
         trainer.fit(model, train_loader, val_loader)
 
-        # 2. Zapisz model
+        # 5. Save the trained checkpoint
         model_base_name = os.path.splitext(dataset_file)[0].replace("cnn_dataset_", "")
         model_save_path = os.path.join(MODELS_DIR, f"cnn_model_{model_base_name}.ckpt")
         trainer.save_checkpoint(model_save_path)
         print(f"\n[+] CNN Training complete! Checkpoint saved to: {model_save_path}")
 
-        print("\n[*] Trwa generowanie wykresów i raportów...")
-        import torch
-        
-        map_path = os.path.join(DATA_CSV_DIR, "cnn_class_map.json")
-        target_names = [f"Klasa {i}" for i in range(output_dim)] # Wartości domyślne
-        if os.path.exists(map_path):
-            with open(map_path, 'r') as f:
-                class_map = json.load(f)
-            idx_to_app = {v: k for k, v in class_map.items()}
-            target_names = [idx_to_app.get(i, f"Klasa {i}") for i in range(output_dim)]
-
-        model.eval()
-        all_preds = []
-        all_labels = []
-        
-        with torch.no_grad():
-            for batch in val_loader:
-                x = batch["feature"].to(model.device)
-                y = batch["label"].to(model.device)
-                y_hat = model(x)
-                preds = torch.argmax(y_hat, dim=1)
-                
-                all_preds.extend(preds.cpu().numpy())
-                all_labels.extend(y.cpu().numpy())
-                
-        print("\n--- Szczegółowy Raport Klasyfikacji ---")
-        
-        # 1. Sprawdź, jakie ID klas FAKTYCZNIE wystąpiły w zbiorze walidacyjnym
-        present_classes_ids = np.unique(all_labels)
-        
-        # 2. Przefiltruj target_names tak, aby odpowiadały tylko obecnym klasom
-        filtered_target_names = [target_names[i] for i in present_classes_ids if i < len(target_names)]
-        
-        # 3. Przekaż jawnie argument 'labels', aby ograniczyć raport do obecnych klas
-        print(classification_report(
-            all_labels, 
-            all_preds, 
-            labels=present_classes_ids, 
-            target_names=filtered_target_names, 
-            zero_division=0
-        ))
-        
-        # Wywołanie Twojej macierzy pomyłek powinno teraz przejść bez problemu,
-        # ponieważ Twoja funkcja plot_confusion_matrix wewnętrznie już próbuje filtrować klasy przez unique_in_true
-        plot_confusion_matrix(all_labels, all_preds, labels=target_names, reports_dir="reports", tag="cnn_val")
-        
-        try:
-            from visualization.cnn_history_plot import plot_training_history
-            metrics_csv_path = f"{logger.log_dir}/metrics.csv"
-            plot_training_history(metrics_csv_path)
-        except ImportError:
-            print("[!] Pomięto rysowanie krzywych uczenia (brak pliku visualization/cnn_history_plot.py)")
-
     except Exception as e:
         print(f"[!] Training interrupted or failed: {e}")
+
 
 def menu_online_mode():
     """Option 5: Live classification with asynchronous packet processing buffer."""
