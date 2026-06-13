@@ -3,7 +3,35 @@ import time
 import socket
 from scapy.all import get_if_list, get_if_addr
 from scapy.sendrecv import sniff
+from scapy.layers.inet import IP, UDP, TCP
+from scapy.layers.inet6 import IPv6
 from preprocessing.feature_extractor import FlowFeatureExtractor
+
+# Porty które nie mają sensu klasyfikować (broadcast/discovery/mDNS)
+_NOISE_PORTS = {5353, 137, 138, 1900, 5355, 6666, 12177}
+
+# Prefiksy adresów multicast/broadcast
+_MULTICAST_PREFIXES = ("224.", "239.", "255.", "ff02", "ff05")
+
+
+def _is_noise_packet(packet) -> bool:
+    """Zwraca True jeśli pakiet to ruch sieciowy który nie powinien być klasyfikowany."""
+    if packet.haslayer(IP):
+        dst = packet[IP].dst
+        if any(dst.startswith(p) for p in _MULTICAST_PREFIXES):
+            return True
+        if dst == "255.255.255.255":
+            return True
+    elif packet.haslayer(IPv6):
+        dst = packet[IPv6].dst
+        if dst.startswith("ff"):
+            return True
+
+    if packet.haslayer(UDP):
+        if packet[UDP].dport in _NOISE_PORTS or packet[UDP].sport in _NOISE_PORTS:
+            return True
+
+    return False
 
 
 class SnifferOnline:
@@ -12,9 +40,14 @@ class SnifferOnline:
                  prediction_callback(features, flow_key) po flushu.
     mode="raw":  każdy pakiet trafia bezpośrednio do
                  packet_callback(packet) (per-pakiet, jak CNN).
-
-    Tylko JEDEN wątek konsumuje packet_queue - wybrany przez `mode`.
     """
+
+    # Czas (w sekundach) po którym flow pakietowy zostaje wymuszony,
+    # nawet jeśli nie zebrał wymaganej liczby pakietów.
+    PACKET_FLOW_TIMEOUT = 5.0
+
+    # Minimalna liczba pakietów w flow żeby go w ogóle klasyfikować (timeout flush).
+    MIN_PKTS_FOR_TIMEOUT_FLUSH = 3
 
     def __init__(self, interface=None, agg_mode="packet", agg_value=50,
                  mode="flow", prediction_callback=None, packet_callback=None):
@@ -39,10 +72,20 @@ class SnifferOnline:
         self.last_drop_warning = time.time()
 
         self.active_flows = {}
-        # Potrzebny tylko w mode="flow", ale konstrukcja jest darmowa
-        self.feature_extractor = FlowFeatureExtractor(agg_mode=self.agg_mode, agg_value=self.agg_value)
+        # Śledzenie czasu ostatniego pakietu per flow (do timeout flush)
+        self.flow_last_seen = {}
+
+        self.feature_extractor = FlowFeatureExtractor(
+            agg_mode=self.agg_mode,
+            agg_value=self.agg_value
+        )
 
     def _packet_handler(self, packet):
+        """Wywoływane przez sniff() dla każdego pakietu — tylko kolejkuje."""
+        # Odfiltruj szum sieciowy zanim trafi do kolejki
+        if _is_noise_packet(packet):
+            return
+
         try:
             self.packet_queue.put(packet, block=False)
         except queue.Full:
@@ -50,12 +93,11 @@ class SnifferOnline:
             current_time = time.time()
             if current_time - self.last_drop_warning > 5.0:
                 print(f"\n[!] Warning: Dropped {self.dropped_packets} packets. "
-                      "Consider increasing throughput (e.g., smaller aggregation value).")
+                      "Consider increasing throughput or reducing agg_value.")
                 self.last_drop_warning = current_time
 
     def _detect_active_iface(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
         try:
             s.connect(("8.8.8.8", 80))
             local_ip = s.getsockname()[0]
@@ -64,15 +106,11 @@ class SnifferOnline:
 
         for iface in get_if_list():
             try:
-                iface_ip = get_if_addr(iface)
-
-                if iface_ip == local_ip:
-                    print(f"[*] Wykryto aktywną kartę: {iface} ({iface_ip})")
+                if get_if_addr(iface) == local_ip:
+                    print(f"[*] Wykryto aktywną kartę: {iface} ({local_ip})")
                     return iface
-
             except Exception:
                 continue
-
         return None
 
     # ------------------------------------------------------------------
@@ -94,7 +132,8 @@ class SnifferOnline:
     # MODE "flow" - agregacja przepływów (RF)
     # ------------------------------------------------------------------
     def _flow_processing_worker(self):
-        print(f"[*] Online Worker started (flow mode). Mode: {self.agg_mode}, Value: {self.agg_value}")
+        print(f"[*] Online Worker started (flow mode). "
+              f"Mode: {self.agg_mode}, Value: {self.agg_value}")
 
         while not self.stop_sniffing:
             try:
@@ -104,12 +143,16 @@ class SnifferOnline:
 
                 flow_key = self.feature_extractor._get_flow_key(packet)
                 if not flow_key:
+                    self.packet_queue.task_done()
                     continue
+
+                now = time.time()
 
                 if flow_key not in self.active_flows:
                     self.active_flows[flow_key] = []
 
                 self.active_flows[flow_key].append(packet)
+                self.flow_last_seen[flow_key] = now
                 flow_packets = self.active_flows[flow_key]
 
                 flush_flow = False
@@ -120,34 +163,52 @@ class SnifferOnline:
                     flush_flow = time_diff >= self.agg_value
 
                 if flush_flow:
-                    features = self.feature_extractor._calculate_features(flow_packets)
-                    self.active_flows[flow_key] = []
-                    self.prediction_callback(features, flow_key)
+                    self._flush_flow(flow_key, flow_packets)
 
                 self.packet_queue.task_done()
 
             except queue.Empty:
-                if self.agg_mode == "time":
-                    keys_to_flush = []
-                    current_time = time.time() 
-                    
-                    for key, pkts in self.active_flows.items():
-                        if len(pkts) < 2:
-                            continue
-                        
-                        duration = current_time - float(pkts[0].time)
-                        if duration >= self.agg_value:
-                            keys_to_flush.append(key)
+                # Kolejka pusta — dobry moment żeby sprawdzić stare flow
+                self._timeout_flush_stale_flows()
 
-                    for key in keys_to_flush:
-                        flow_packets = self.active_flows[key]
-                        features = self.feature_extractor._calculate_features(flow_packets)
-                        self.active_flows[key] = []
-                        self.prediction_callback(features, key)
+    def _flush_flow(self, flow_key, flow_packets):
+        """Klasyfikuje flow i czyści bufor."""
+        features = self.feature_extractor._calculate_features(flow_packets)
+        self.active_flows[flow_key] = []
+        self.flow_last_seen.pop(flow_key, None)
+        self.prediction_callback(features, flow_key)
+
+    def _timeout_flush_stale_flows(self):
+        """
+        Wymusza klasyfikację flowów które nie dostały nowego pakietu
+        od PACKET_FLOW_TIMEOUT sekund.
+
+        Działa zarówno dla trybu 'packet' jak i 'time' — w obu przypadkach
+        flow który "stoi" jest lepiej sklasyfikować na podstawie tego co mamy
+        niż czekać w nieskończoność.
+        """
+        now = time.time()
+        keys_to_flush = []
+
+        for key, last_seen in list(self.flow_last_seen.items()):
+            if now - last_seen < self.PACKET_FLOW_TIMEOUT:
+                continue
+
+            pkts = self.active_flows.get(key, [])
+            if len(pkts) >= self.MIN_PKTS_FOR_TIMEOUT_FLUSH:
+                keys_to_flush.append(key)
+            elif pkts:
+                # Za mało pakietów — po prostu wyczyść bufor bez klasyfikacji
+                self.active_flows[key] = []
+                self.flow_last_seen.pop(key, None)
+
+        for key in keys_to_flush:
+            pkts = self.active_flows.get(key, [])
+            if pkts:
+                self._flush_flow(key, pkts)
 
     # ------------------------------------------------------------------
     def start_capture(self):
-
         if not self.interface:
             self.interface = self._detect_active_iface()
 
@@ -156,11 +217,21 @@ class SnifferOnline:
 
         print(f"[*] Starting capture on: {self.interface}")
 
+        # Uruchamiamy worker PRZED sniff() — sniff() blokuje wątek
+        if self.mode == "flow":
+            worker_fn = self._flow_processing_worker
+        else:
+            worker_fn = self._raw_packet_worker
+
+        worker_thread = threading.Thread(target=worker_fn, daemon=True)
+        worker_thread.start()
+
         sniff(
             prn=self._packet_handler,
             store=False,
             iface=self.interface,
-            promisc=True
+            promisc=True,
+            stop_filter=lambda _: self.stop_sniffing,
         )
 
     def stop_capture(self):
@@ -170,3 +241,6 @@ class SnifferOnline:
         except queue.Full:
             pass
         print("[*] Capture stopped.")
+
+
+import threading

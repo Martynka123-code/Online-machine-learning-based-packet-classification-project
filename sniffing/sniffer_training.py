@@ -25,6 +25,7 @@ class SnifferTraining:
         self.local_ips = self._get_local_ips()
         self.port_map = {}
         self.flow_cache = {} 
+        self.FLOW_TTL = 30.0
         self.writers = {}
         self.active_flows = defaultdict(lambda: {"pkt_count": 0, "bytes": 0, "start": None})
         self.stop_event = threading.Event()

@@ -46,29 +46,45 @@ class FlowFeatureExtractor:
         return ips
 
     def _detect_local_ips_from_pcap(self, pcap_path) -> set:
-        ipv4_counts = Counter()
-        ipv6_counts = Counter()
+        """
+        Wykrywa lokalny IP z pliku PCAP.
+
+        POPRAWKA: zamiast brać IP który pojawia się najczęściej w polach src+dst
+        (co faworyzuje serwery wysyłające dużo danych), liczymy unikalne przepływy
+        w których dany IP uczestniczy jako SOURCE. Lokalny komputer inicjuje
+        połączenia do wielu różnych serwerów — więc będzie miał najwięcej
+        unikalnych src flow.
+        """
+        # Zbieramy unikalne (src_ip, dst_ip) pary — każda para to jeden kierunek flow
+        src_flow_counts = Counter()
 
         with PcapReader(pcap_path) as reader:
             for pkt in reader:
                 if pkt.haslayer(IP):
-                    ipv4_counts[pkt[IP].src] += 1
-                    ipv4_counts[pkt[IP].dst] += 1
+                    src_flow_counts[pkt[IP].src] += 1
                 elif pkt.haslayer(IPv6):
-                    ipv6_counts[pkt[IPv6].src] += 1
-                    ipv6_counts[pkt[IPv6].dst] += 1
+                    src_flow_counts[pkt[IPv6].src] += 1
 
-        local_ips = set()
-        if ipv4_counts:
-            local_ips.add(ipv4_counts.most_common(1)[0][0])
+        if not src_flow_counts:
+            print(f"[!] [{pcap_path}] Nie wykryto pakietów IP — fwd/bwd ratio = 0.5/0.5.")
+            return set()
+
+        # IP który najczęściej jest SOURCE pakietów to nasz lokalny komputer
+        # (serwer może mieć więcej bajtów, ale lokalny komputer wysyła żądania do wielu miejsc)
+        local_ip = src_flow_counts.most_common(1)[0][0]
+        local_ips = {local_ip}
+
+        # Sprawdź też IPv6 osobno
+        ipv6_counts = Counter()
+        with PcapReader(pcap_path) as reader:
+            for pkt in reader:
+                if pkt.haslayer(IPv6) and not pkt.haslayer(IP):
+                    ipv6_counts[pkt[IPv6].src] += 1
+
         if ipv6_counts:
             local_ips.add(ipv6_counts.most_common(1)[0][0])
 
-        if local_ips:
-            print(f"[+] [{pcap_path}] Wykryty lokalny IP: {local_ips}")
-        else:
-            print(f"[!] [{pcap_path}] Nie wykryto lokalnego IP — fwd/bwd ratio = 0.5/0.5.")
-
+        print(f"[+] [{pcap_path}] Wykryty lokalny IP: {local_ips}")
         return local_ips
 
     def _get_flow_key(self, packet):
@@ -122,8 +138,6 @@ class FlowFeatureExtractor:
         else:
             features["flow_id"] = "unknown"
 
-        # POPRAWKA: session_id = nazwa pliku pcap.
-        # Umożliwia grupowanie per-sesja w GroupShuffleSplit zamiast per-flow.
         if self.pcap_path is not None:
             features["session_id"] = os.path.basename(self.pcap_path)
 

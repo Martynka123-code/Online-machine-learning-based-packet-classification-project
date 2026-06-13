@@ -19,11 +19,10 @@ from visualization.cnn_visualizer import (
     plot_cnn_confusion_matrix,
     plot_cnn_f1_per_class,
 )
+# POPRAWKA: usunięto zduplikowany import Trainer i CSVLogger (były zaimportowane dwa razy)
 from pytorch_lightning import Trainer
-from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
-# Import configuration and custom modules
 from config import DATA_CNN_DIR, DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES, TIME_WINDOWS
 from models.cnn_online import CNNOnline
 from preprocessing.cnn_preprocessor import CNNPreprocessor
@@ -33,8 +32,6 @@ from preprocessing.feature_extractor import FlowFeatureExtractor
 from models.rf_trainer import RandomForestTrainer
 from models.rf_online import RandomForestOnline
 from torch.utils.data import DataLoader, random_split
-from pytorch_lightning import Trainer
-from models.cnn_trainer import OptimizedPacketCNN, PacketByteDataset
 from visualization.rf_visualizer import plot_granularity_comparison
 
 
@@ -42,7 +39,8 @@ def menu_collect_data():
     """Option 1: Collect raw traffic using the process-to-port sniffer."""
     print("\n--- Data Collection Mode ---")
     app_name = input("Enter application name to monitor (e.g., spotify): ").strip().lower()
-    if not app_name: return
+    if not app_name:
+        return
 
     sniffer = SnifferTraining(target_apps=[app_name])
     sniffer.start()
@@ -51,8 +49,7 @@ def menu_collect_data():
 def menu_extract_features():
     """Option 2: Convert PCAP files to CSV datasets for multiple granularities."""
     print("\n--- Feature Extraction (PCAP to CSV) ---")
-    
-    # Przełączamy się na folder ze zbalansowanymi plikami!
+
     balanced_dir = os.path.join("data", "balanced_pcaps")
     if not os.path.exists(balanced_dir):
         print(f"[!] Folder {balanced_dir} nie istnieje. Najpierw wygeneruj zbalansowane PCAPy (pcap_balancer.py).")
@@ -64,7 +61,7 @@ def menu_extract_features():
         return
 
     print("\nDostępne pliki PCAP w zbalansowanym folderze:")
-    for f in files: 
+    for f in files:
         print(f"  - {f}")
 
     print("\n[WSKAZÓWKA] Wpisz 'all', aby automatycznie przetworzyć WSZYSTKIE pliki.")
@@ -72,8 +69,7 @@ def menu_extract_features():
 
     if user_input.lower() == 'all':
         print("\n[*] Rozpoczynam automatyczne przetwarzanie wszystkich plików (Tryb ALL)...")
-        
-        # Zabezpieczenie przed powielaniem starych danych
+
         confirm = input("Czy wyczyścić stare pliki CSV przed ekstrakcją? (y/n - zalecane 'y'): ").strip().lower()
         if confirm == 'y':
             for f in os.listdir(DATA_CSV_DIR):
@@ -83,38 +79,30 @@ def menu_extract_features():
 
         for f in files:
             pcap_path = os.path.join(balanced_dir, f)
-            
-            # Automatyczne odgadywanie etykiety (np. "discord_balanced_part1.pcap" -> "Discord")
             label = f.split('_')[0].capitalize()
-            
             print(f"\n---> Przetwarzanie pliku: {f} | Wykryta Etykieta: {label}")
-            
-            # 1. Agregacja Pakietowa (Twój stary kod)
+
             print(f"  [*] Ekstrakcja dla granularności (pakiety): {GRANULARITIES}")
             for gran in GRANULARITIES:
                 output_csv = os.path.join(DATA_CSV_DIR, f"rf_dataset_{gran}.csv")
                 extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='packet', agg_value=gran)
                 extractor.process_and_save(output_csv)
-            
-            # 2. Agregacja Czasowa (NOWY KOD)
+
             print(f"  [*] Ekstrakcja dla okien czasowych (sekundy): {TIME_WINDOWS}")
             for tw in TIME_WINDOWS:
                 output_csv_time = os.path.join(DATA_CSV_DIR, f"rf_dataset_time_{tw}.csv")
                 extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='time', agg_value=tw)
                 extractor.process_and_save(output_csv_time)
-        
-        print("\n[+] ZAKOŃCZONO MASOWĄ EKSTRAKCJĘ CECH!")
+
+        print("\n[+] ZAKOŃCZONO MASOWĄ EKSTRAKCJĄ CECH!")
         return
 
     else:
-        # Klasyczny tryb dla pojedynczego pliku
         pcap_path = os.path.join(balanced_dir, user_input)
-
         if not os.path.exists(pcap_path):
             print("[!] Nie znaleziono pliku.")
             return
 
-        # Propozycja domyślnej etykiety nawet w trybie ręcznym
         guessed_label = user_input.split('_')[0].capitalize()
         label = input(f"Wprowadź etykietę dla ruchu (wciśnij Enter by użyć '{guessed_label}'): ").strip()
         if not label:
@@ -130,41 +118,39 @@ def menu_extract_features():
 def menu_extract_features_cnn():
     """Option 3: Convert ALL available PCAP files into a single master NPZ dataset for CNN."""
     print("\n--- Batch Feature Extraction for CNN (All PCAPs to Single Master NPZ) ---")
- 
+
     files = [f for f in os.listdir(DATA_RAW_DIR) if f.endswith('.pcap')]
     if not files:
         print(f"[!] No PCAP files found in {DATA_RAW_DIR}")
         return
- 
+
     detected_apps = sorted(list(set([os.path.splitext(f)[0].split('_')[0] for f in files])))
     class_map = {app_name: idx for idx, app_name in enumerate(detected_apps)}
- 
+
     print("\n[+] Automatically discovered applications and assigned indices:")
     for app_name, idx in class_map.items():
         print(f"  Class {idx}: {app_name}")
- 
+
     map_path = os.path.join(DATA_CNN_DIR, "cnn_class_map.json")
     with open(map_path, 'w') as f:
         json.dump(class_map, f, indent=4)
     print(f"[+] Class mapping dictionary saved to: {map_path}")
- 
+
     preprocessor = CNNPreprocessor(max_length=1000)
     print("\n[*] Processing PCAP files into a combined memory array...")
- 
+
     for f in files:
         app_name = os.path.splitext(f)[0].split('_')[0]
         label_idx = class_map[app_name]
         pcap_path = os.path.join(DATA_RAW_DIR, f)
         preprocessor.process_pcap(pcap_path, label_idx)
- 
+
     output_npz = os.path.join(DATA_CNN_DIR, f"cnn_dataset_{datetime.now().strftime('%Y-%m-%d')}_master.npz")
     preprocessor.save_dataset(output_npz)
- 
-
 
 
 def menu_validate_datasets():
-    """Option 3: Quality check for generated CSV datasets (from test2)."""
+    """Option 4: Quality check for generated CSV datasets."""
     print("\n--- Feature Validation Report ---")
     csv_files = [f for f in os.listdir(DATA_CSV_DIR) if f.endswith('.csv')]
     if not csv_files:
@@ -179,7 +165,7 @@ def menu_validate_datasets():
 
 
 def menu_train_models():
-    """Option 4/5: Train RF models for both Packet and Time granularities."""
+    """Option 5: Train RF models for both Packet and Time granularities."""
     print("\n--- Model Training & Advanced Analytics ---")
     results_pkt = {}
     results_time = {}
@@ -191,7 +177,7 @@ def menu_train_models():
             trainer = RandomForestTrainer(csv_path, reports_dir="reports")
             acc = trainer.train_and_evaluate()
             if acc is not None:
-                results_pkt[gran] = acc  # Zostawiamy czystą liczbę (int)!
+                results_pkt[gran] = acc
                 model_path = os.path.join(MODELS_DIR, f"rf_model_{gran}.pkl")
                 trainer.save_model(model_path)
 
@@ -210,16 +196,16 @@ def menu_train_models():
         print("\n--- Training Summary (Packets) ---")
         for key, a in results_pkt.items():
             print(f"Config {key:>3} pkts: Accuracy {a:.2%}")
-        from visualization.rf_visualizer import plot_granularity_comparison
         try:
             plot_granularity_comparison(results_pkt)
         except Exception as e:
             print(f"[!] Nie udało się narysować wykresu pakietów: {e}")
-            
+
     if results_time:
         print("\n--- Training Summary (Time Windows) ---")
         for key, a in results_time.items():
             print(f"Config {key:>3} s: Accuracy {a:.2%}")
+
 
 def menu_train_cnn_models():
     """Option 6: Train CNN models using PyTorch Lightning with raw byte datasets."""
@@ -241,21 +227,14 @@ def menu_train_cnn_models():
         print("[!] File not found.")
         return
 
-    # ------------------------------------------------------------
-    # Class map (potrzebny do wykresów z prawdziwymi nazwami aplikacji)
-    # ------------------------------------------------------------
     class_map_path = os.path.join(DATA_CNN_DIR, "cnn_class_map.json")
     if not os.path.exists(class_map_path):
-        print(f"[!] Class map not found at {class_map_path}. "
-              f"Run option 3 (Extract Features for CNN) first.")
+        print(f"[!] Class map not found at {class_map_path}. Run option 3 first.")
         return
 
     with open(class_map_path, "r") as f:
         class_map = json.load(f)
 
-    # ------------------------------------------------------------
-    # Dataset / DataLoaders
-    # ------------------------------------------------------------
     try:
         full_dataset = PacketByteDataset(dataset_path)
         train_size = int(0.8 * len(full_dataset))
@@ -280,9 +259,6 @@ def menu_train_cnn_models():
 
     model = OptimizedPacketCNN(output_dim=output_dim, signal_length=1000)
 
-    # ------------------------------------------------------------
-    # Logger + callback do zbierania metryk per epoka
-    # ------------------------------------------------------------
     model_base_name = os.path.splitext(dataset_file)[0].replace("cnn_dataset_", "")
 
     metrics_cb = MetricsCallback()
@@ -303,20 +279,13 @@ def menu_train_cnn_models():
         print(f"[!] Training interrupted or failed: {e}")
         return
 
-    # ------------------------------------------------------------
-    # Zapis checkpointu
-    # ------------------------------------------------------------
     model_save_path = os.path.join(MODELS_DIR, f"cnn_model_{model_base_name}.ckpt")
     trainer.save_checkpoint(model_save_path)
     print(f"\n[+] CNN Training complete! Checkpoint saved to: {model_save_path}")
 
-    # ------------------------------------------------------------
-    # Wizualizacje
-    # ------------------------------------------------------------
     reports_dir = "reports"
     os.makedirs(reports_dir, exist_ok=True)
 
-    # 1. Krzywe uczenia (loss / accuracy / f1 per epoka)
     history = metrics_cb.history
     if history["train_loss"] and history["val_loss"] and history["val_acc"]:
         plot_cnn_training_curves(
@@ -330,7 +299,6 @@ def menu_train_cnn_models():
     else:
         print("[!] No epoch metrics collected — skipping training curves plot.")
 
-    # 2. Rozkład klas w zbiorze
     plot_cnn_class_distribution(
         labels=full_dataset.labels,
         class_map=class_map,
@@ -338,7 +306,6 @@ def menu_train_cnn_models():
         tag=model_base_name,
     )
 
-    # 3. Confusion matrix + Precision/Recall/F1 per klasa na zbiorze walidacyjnym
     print("\n[*] Running inference on validation split for confusion matrix / F1 plots...")
     model.eval()
     torch.set_grad_enabled(False)
@@ -359,8 +326,9 @@ def menu_train_cnn_models():
 
     print(f"\n[+] All training reports saved in: {reports_dir}/")
 
+
 def menu_online_mode():
-    """Option 5: Live classification with asynchronous packet processing buffer."""
+    """Option 7: Live classification with asynchronous packet processing buffer."""
     print("\n--- Online Classification (Real-time) ---")
 
     agg_mode = input("Select aggregation mode [packet / time]: ").strip().lower()
@@ -383,7 +351,7 @@ def menu_online_mode():
 
     model_path = os.path.join(MODELS_DIR, model_name)
     if not os.path.exists(model_path):
-        print(f"[!] Model '{model_name}' not found. Train it first (Option 4).")
+        print(f"[!] Model '{model_name}' not found. Train it first (Option 5).")
         return
 
     classifier = RandomForestOnline(model_path)
@@ -394,7 +362,6 @@ def menu_online_mode():
         conf = result.get("confidence", 0.0)
         probs = result.get("probabilities", {})
         probs_str = ", ".join([f"{label}: {prob * 100:.1f}%" for label, prob in probs.items()])
-
         print(
             f"[LIVE] Flow {flow_key[4]}: {flow_key[0]}:{flow_key[2]} <-> {flow_key[1]}:{flow_key[3]} | "
             f"App: {pred} ({conf * 100:.1f}%) | Szczegóły: [{probs_str}]"
@@ -402,13 +369,22 @@ def menu_online_mode():
 
     print(f"[*] Loaded model: {model_path}")
     sniffer = SnifferOnline(agg_mode=agg_mode, agg_value=agg_value,
-                             mode="flow", prediction_callback=on_flow_ready)
+                            mode="flow", prediction_callback=on_flow_ready)
+
+    from scapy.all import get_if_list, get_if_addr
+    print("Dostępne interfejsy:")
+    for iface in get_if_list():
+        try:
+            print(f"  {iface}: {get_if_addr(iface)}")
+        except Exception:
+            pass
 
     try:
         sniffer.start_capture()
     except KeyboardInterrupt:
         print("\n[*] Stopping capture...")
         sniffer.stop_capture()
+
 
 def menu_online_mode_cnn():
     """Option 8: Live packet classification using the trained CNN model (Per-Packet)."""
@@ -444,8 +420,7 @@ def menu_online_mode_cnn():
         else:
             src, dst = "unknown", "unknown"
 
-        print(
-            f"[LIVE-CNN] {src}:{sport} -> {dst}:{dport} ({proto}) | App: {app_name.upper()} ({confidence * 100:.1f}%)")
+        print(f"[LIVE-CNN] {src}:{sport} -> {dst}:{dport} ({proto}) | App: {app_name.upper()} ({confidence * 100:.1f}%)")
 
     sniffer = SnifferOnline(mode="raw", packet_callback=on_packet)
 
@@ -469,7 +444,7 @@ def main():
         print(" 5. Train Random Forest Models")
         print(" 6. Train CNN Models (PyTorch Lightning)")
         print(" 7. Run Online Classification (Live) [Random Forest]")
-        print(" 8. Run Online Classification (Live) [CNN]")  # <--- DODANE
+        print(" 8. Run Online Classification (Live) [CNN]")
         print(" 0. Exit")
 
         cmd = input("\nSelect option: ").strip()
@@ -488,7 +463,7 @@ def main():
         elif cmd == '7':
             menu_online_mode()
         elif cmd == '8':
-            menu_online_mode_cnn()  # <--- PODPIĘCIE FUNKCJI
+            menu_online_mode_cnn()
         elif cmd == '0':
             break
 
