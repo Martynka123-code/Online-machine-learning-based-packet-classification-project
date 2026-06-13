@@ -12,6 +12,13 @@ from pytorch_lightning.loggers import CSVLogger
 from sklearn.metrics import classification_report
 
 from visualization.confusion_matrix_plot import plot_confusion_matrix
+from models.cnn_trainer import OptimizedPacketCNN, PacketByteDataset, MetricsCallback
+from visualization.cnn_visualizer import (
+    plot_cnn_training_curves,
+    plot_cnn_class_distribution,
+    plot_cnn_confusion_matrix,
+    plot_cnn_f1_per_class,
+)
 
 # Import configuration and custom modules
 from config import DATA_CNN_DIR, DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
@@ -84,7 +91,7 @@ def menu_extract_features_cnn():
         print(f"  Class {idx}: {app_name}")
 
     # Save the class map to a JSON file so the online module knows which index maps to which app
-    map_path = os.path.join(DATA_CSV_DIR, "cnn_class_map.json")
+    map_path = os.path.join(DATA_CNN_DIR, "cnn_class_map.json")
     with open(map_path, 'w') as f:
         json.dump(class_map, f, indent=4)
     print(f"[+] Class mapping dictionary saved to: {map_path}")
@@ -165,6 +172,21 @@ def menu_train_cnn_models():
         print("[!] File not found.")
         return
 
+    # ------------------------------------------------------------
+    # Class map (potrzebny do wykresów z prawdziwymi nazwami aplikacji)
+    # ------------------------------------------------------------
+    class_map_path = os.path.join(DATA_CNN_DIR, "cnn_class_map.json")
+    if not os.path.exists(class_map_path):
+        print(f"[!] Class map not found at {class_map_path}. "
+              f"Run option 3 (Extract Features for CNN) first.")
+        return
+
+    with open(class_map_path, "r") as f:
+        class_map = json.load(f)
+
+    # ------------------------------------------------------------
+    # Dataset / DataLoaders
+    # ------------------------------------------------------------
     try:
         full_dataset = PacketByteDataset(dataset_path)
         train_size = int(0.8 * len(full_dataset))
@@ -189,20 +211,84 @@ def menu_train_cnn_models():
 
     model = OptimizedPacketCNN(output_dim=output_dim, signal_length=1000)
 
+    # ------------------------------------------------------------
+    # Logger + callback do zbierania metryk per epoka
+    # ------------------------------------------------------------
+    model_base_name = os.path.splitext(dataset_file)[0].replace("cnn_dataset_", "")
+
+    metrics_cb = MetricsCallback()
+    csv_logger = CSVLogger(save_dir="lightning_logs", name=f"cnn_{model_base_name}")
+
     print("\n[*] Starting PyTorch Lightning Training Session...")
-    trainer = Trainer(max_epochs=epochs, accelerator="auto", devices=1)
+    trainer = Trainer(
+        max_epochs=epochs,
+        accelerator="auto",
+        devices=1,
+        logger=csv_logger,
+        callbacks=[metrics_cb],
+    )
 
     try:
         trainer.fit(model, train_loader, val_loader)
-
-        # 5. Save the trained checkpoint
-        model_base_name = os.path.splitext(dataset_file)[0].replace("cnn_dataset_", "")
-        model_save_path = os.path.join(MODELS_DIR, f"cnn_model_{model_base_name}.ckpt")
-        trainer.save_checkpoint(model_save_path)
-        print(f"\n[+] CNN Training complete! Checkpoint saved to: {model_save_path}")
-
     except Exception as e:
         print(f"[!] Training interrupted or failed: {e}")
+        return
+
+    # ------------------------------------------------------------
+    # Zapis checkpointu
+    # ------------------------------------------------------------
+    model_save_path = os.path.join(MODELS_DIR, f"cnn_model_{model_base_name}.ckpt")
+    trainer.save_checkpoint(model_save_path)
+    print(f"\n[+] CNN Training complete! Checkpoint saved to: {model_save_path}")
+
+    # ------------------------------------------------------------
+    # Wizualizacje
+    # ------------------------------------------------------------
+    reports_dir = "reports"
+    os.makedirs(reports_dir, exist_ok=True)
+
+    # 1. Krzywe uczenia (loss / accuracy / f1 per epoka)
+    history = metrics_cb.history
+    if history["train_loss"] and history["val_loss"] and history["val_acc"]:
+        plot_cnn_training_curves(
+            train_losses=history["train_loss"],
+            val_losses=history["val_loss"],
+            val_accuracies=history["val_acc"],
+            reports_dir=reports_dir,
+            tag=model_base_name,
+            val_f1_scores=history["val_f1_macro"] or None,
+        )
+    else:
+        print("[!] No epoch metrics collected — skipping training curves plot.")
+
+    # 2. Rozkład klas w zbiorze
+    plot_cnn_class_distribution(
+        labels=full_dataset.labels,
+        class_map=class_map,
+        reports_dir=reports_dir,
+        tag=model_base_name,
+    )
+
+    # 3. Confusion matrix + Precision/Recall/F1 per klasa na zbiorze walidacyjnym
+    print("\n[*] Running inference on validation split for confusion matrix / F1 plots...")
+    model.eval()
+    torch.set_grad_enabled(False)
+
+    y_true, y_pred = [], []
+    for batch in val_loader:
+        x = batch["feature"]
+        y = batch["label"].long()
+        logits = model(x)
+        preds = torch.argmax(logits, dim=1)
+        y_true.extend(y.tolist())
+        y_pred.extend(preds.tolist())
+
+    torch.set_grad_enabled(True)
+
+    plot_cnn_confusion_matrix(y_true, y_pred, class_map, reports_dir, tag=model_base_name)
+    plot_cnn_f1_per_class(y_true, y_pred, class_map, reports_dir, tag=model_base_name)
+
+    print(f"\n[+] All training reports saved in: {reports_dir}/")
 
 def menu_online_mode():
     """Option 5: Live classification with asynchronous packet processing buffer."""
