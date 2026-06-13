@@ -106,10 +106,13 @@ class SnifferOnline:
             except queue.Empty:
                 if self.agg_mode == "time":
                     keys_to_flush = []
+                    current_time = time.time() 
+                    
                     for key, pkts in self.active_flows.items():
                         if len(pkts) < 2:
                             continue
-                        duration = float(pkts[-1].time - pkts[0].time)
+                        
+                        duration = current_time - float(pkts[0].time)
                         if duration >= self.agg_value:
                             keys_to_flush.append(key)
 

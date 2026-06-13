@@ -110,7 +110,7 @@ class SnifferTraining:
         
         with self.lock:
             if app not in self.writers:
-                self.writers[app] = PcapWriter(path, append=True, sync=True)
+                self.writers[app] = PcapWriter(path, append=True, sync=False)
             self.writers[app].write(packet)
 
     def start(self):
