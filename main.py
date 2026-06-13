@@ -204,7 +204,6 @@ def menu_train_cnn_models():
     except Exception as e:
         print(f"[!] Training interrupted or failed: {e}")
 
-
 def menu_online_mode():
     """Option 5: Live classification with asynchronous packet processing buffer."""
     print("\n--- Online Classification (Real-time) ---")
@@ -233,86 +232,33 @@ def menu_online_mode():
         return
 
     classifier = RandomForestOnline(model_path)
-    extractor = FlowFeatureExtractor(pcap_path=None, label=None, agg_mode=agg_mode, agg_value=agg_value)
-    sniffer = SnifferOnline()
-    active_flows = {}
 
-    def packet_processor():
-        """Background worker thread to handle packet buffering and classification."""
-        print(f"[*] Worker thread started: processing packets in '{agg_mode}' mode (val: {agg_value})...")
-        FLOW_TIMEOUT = 120.0
+    def on_flow_ready(features, flow_key):
+        result = classifier.classify_stream(features)
+        pred = result.get("prediction", "UNKNOWN")
+        conf = result.get("confidence", 0.0)
+        probs = result.get("probabilities", {})
+        probs_str = ", ".join([f"{label}: {prob * 100:.1f}%" for label, prob in probs.items()])
 
-        while True:
-            try:
-                packet = sniffer.packet_queue.get(timeout=1.0)
-                if packet is None: break
-
-                key = extractor._get_flow_key(packet)
-                if key is None: continue
-
-                if key not in active_flows:
-                    active_flows[key] = {"packets": [], "last_seen": time.time()}
-
-                active_flows[key]["packets"].append(packet)
-                active_flows[key]["last_seen"] = time.time()
-
-                flow_packets = active_flows[key]["packets"]
-                flush_flow = False
-
-                if agg_mode == "packet":
-                    if len(flow_packets) >= agg_value:
-                        flush_flow = True
-                elif agg_mode == "time":
-                    time_diff = float(flow_packets[-1].time - flow_packets[0].time)
-                    if time_diff >= agg_value:
-                        flush_flow = True
-
-                if flush_flow:
-                    features = extractor._calculate_features(flow_packets)
-                    del active_flows[key]
-
-                    result = classifier.classify_stream(features)
-
-                    pred = result.get("prediction", "UNKNOWN")
-                    conf = result.get("confidence", 0.0)
-                    probs = result.get("probabilities", {})
-
-                    # Formatowanie słownika prawdopodobieństw do czytelnego stringa
-                    # np. "spotify: 85.0%, youtube: 10.5%, inne: 4.5%"
-                    probs_str = ", ".join([f"{label}: {prob * 100:.1f}%" for label, prob in probs.items()])
-
-                    print(
-                        f"[LIVE] Flow {key[4]}: {key[0]}:{key[2]} <-> {key[1]}:{key[3]} | "
-                        f"App: {pred} ({conf * 100:.1f}%) | Szczegóły: [{probs_str}]"
-                    )
-
-                sniffer.packet_queue.task_done()
-
-            except queue.Empty:
-                # Cleanup stale flows that haven't seen packets for a while
-                current_time = time.time()
-                stale_keys = [k for k, v in active_flows.items() if current_time - v["last_seen"] > FLOW_TIMEOUT]
-                for k in stale_keys: del active_flows[k]
-            except Exception as e:
-                print(f"[ERROR] {e}")
+        print(
+            f"[LIVE] Flow {flow_key[4]}: {flow_key[0]}:{flow_key[2]} <-> {flow_key[1]}:{flow_key[3]} | "
+            f"App: {pred} ({conf * 100:.1f}%) | Szczegóły: [{probs_str}]"
+        )
 
     print(f"[*] Loaded model: {model_path}")
-    processor_thread = threading.Thread(target=packet_processor, daemon=True)
-    processor_thread.start()
+    sniffer = SnifferOnline(agg_mode=agg_mode, agg_value=agg_value,
+                             mode="flow", prediction_callback=on_flow_ready)
 
     try:
         sniffer.start_capture()
     except KeyboardInterrupt:
         print("\n[*] Stopping capture...")
         sniffer.stop_capture()
-        processor_thread.join(timeout=1.0)
-
 
 def menu_online_mode_cnn():
     """Option 8: Live packet classification using the trained CNN model (Per-Packet)."""
     print("\n--- Online Classification (Real-time CNN) ---")
 
-    # 1. Define required file paths (using your clean DATA_CNN_DIR layout)
     model_path = os.path.join(MODELS_DIR, "cnn_model_master.ckpt")
     class_map_path = os.path.join(DATA_CNN_DIR, "cnn_class_map.json")
 
@@ -320,63 +266,39 @@ def menu_online_mode_cnn():
         print(f"[!] Required files not found. Ensure cnn_model_master.ckpt and cnn_class_map.json exist.")
         return
 
-    # 2. Initialize the live CNN classifier
     classifier = CNNOnline(model_path, class_map_path)
     if classifier.model is None:
         return
 
-    sniffer = SnifferOnline()
+    from scapy.layers.inet import IP, TCP, UDP
+    from scapy.layers.inet6 import IPv6
 
-    # 3. Define the async background worker
-    def packet_processor():
-        print("[*] CNN Worker thread started: processing packets live packet-by-packet...")
-        while True:
-            try:
-                # Retrieve packet from the sniffer queue
-                packet = sniffer.packet_queue.get(timeout=1.0)
-                if packet is None:
-                    break
+    def on_packet(packet):
+        app_name, confidence = classifier.predict_packet(packet)
+        if app_name is None:
+            return
 
-                # Perform instant per-packet classification
-                app_name, confidence = classifier.predict_packet(packet)
+        proto = "TCP" if packet.haslayer(TCP) else "UDP"
+        sport = packet[TCP].sport if packet.haslayer(TCP) else packet[UDP].sport
+        dport = packet[TCP].dport if packet.haslayer(TCP) else packet[UDP].dport
 
-                if app_name is not None:
-                    # Parse basic metadata from the packet layers for clear user display
-                    from scapy.layers.inet import IP, TCP, UDP
-                    from scapy.layers.inet6 import IPv6
+        if packet.haslayer(IP):
+            src, dst = packet[IP].src, packet[IP].dst
+        elif packet.haslayer(IPv6):
+            src, dst = packet[IPv6].src, packet[IPv6].dst
+        else:
+            src, dst = "unknown", "unknown"
 
-                    proto = "TCP" if packet.haslayer(TCP) else "UDP"
-                    sport = packet[TCP].sport if packet.haslayer(TCP) else packet[UDP].sport
-                    dport = packet[TCP].dport if packet.haslayer(TCP) else packet[UDP].dport
+        print(
+            f"[LIVE-CNN] {src}:{sport} -> {dst}:{dport} ({proto}) | App: {app_name.upper()} ({confidence * 100:.1f}%)")
 
-                    if packet.haslayer(IP):
-                        src, dst = packet[IP].src, packet[IP].dst
-                    elif packet.haslayer(IPv6):
-                        src, dst = packet[IPv6].src, packet[IPv6].dst
-                    else:
-                        src, dst = "unknown", "unknown"
+    sniffer = SnifferOnline(mode="raw", packet_callback=on_packet)
 
-                    # Output classification results immediately to the screen
-                    print(
-                        f"[LIVE-CNN] {src}:{sport} -> {dst}:{dport} ({proto}) | App: {app_name.upper()} ({confidence * 100:.1f}%)")
-
-                sniffer.packet_queue.task_done()
-            except queue.Empty:
-                pass
-            except Exception as e:
-                print(f"[ERROR] {e}")
-
-    # 4. Start the processing worker in a daemon thread
-    processor_thread = threading.Thread(target=packet_processor, daemon=True)
-    processor_thread.start()
-
-    # 5. Start packet capturing on the sniffer side (blocks main thread until Ctrl+C)
     try:
         sniffer.start_capture()
     except KeyboardInterrupt:
         print("\n[*] Stopping live CNN capture...")
         sniffer.stop_capture()
-        processor_thread.join(timeout=1.0)
 
 
 def main():

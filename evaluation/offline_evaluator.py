@@ -28,8 +28,8 @@ def evaluate_rf(packets, model_path, agg_mode, agg_value):
 
     model = RandomForestOnline(model_path)
     extractor = FlowFeatureExtractor(
-        pcap_path=None, label=None,
-        agg_mode=agg_mode, agg_value=agg_value
+    pcap_path=pcap_path, label=None,
+    agg_mode=agg_mode, agg_value=agg_value
     )
 
     results = []
