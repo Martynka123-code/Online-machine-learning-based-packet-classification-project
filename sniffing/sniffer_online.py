@@ -1,22 +1,44 @@
 import queue
-import time 
+import time
 import threading
 from scapy.all import sniff
-from preprocessing.feature_extractor import FlowFeatureExtractor 
+from preprocessing.feature_extractor import FlowFeatureExtractor
+
 
 class SnifferOnline:
-    def __init__(self, interface=None, agg_mode="packet", agg_value=50, prediction_callback=None):
+    """
+    mode="flow": agreguje pakiety w przepływy (jak RF) i wywołuje
+                 prediction_callback(features, flow_key) po flushu.
+    mode="raw":  każdy pakiet trafia bezpośrednio do
+                 packet_callback(packet) (per-pakiet, jak CNN).
+
+    Tylko JEDEN wątek konsumuje packet_queue - wybrany przez `mode`.
+    """
+
+    def __init__(self, interface=None, agg_mode="packet", agg_value=50,
+                 mode="flow", prediction_callback=None, packet_callback=None):
+
+        if mode not in ("flow", "raw"):
+            raise ValueError("mode musi być 'flow' albo 'raw'")
+        if mode == "flow" and prediction_callback is None:
+            raise ValueError("mode='flow' wymaga prediction_callback")
+        if mode == "raw" and packet_callback is None:
+            raise ValueError("mode='raw' wymaga packet_callback")
+
         self.interface = interface
         self.agg_mode = agg_mode
         self.agg_value = agg_value
+        self.mode = mode
         self.prediction_callback = prediction_callback
-        
+        self.packet_callback = packet_callback
+
         self.stop_sniffing = False
-        self.packet_queue = queue.Queue(maxsize=15000) 
+        self.packet_queue = queue.Queue(maxsize=15000)
         self.dropped_packets = 0
         self.last_drop_warning = time.time()
-        
+
         self.active_flows = {}
+        # Potrzebny tylko w mode="flow", ale konstrukcja jest darmowa
         self.feature_extractor = FlowFeatureExtractor(agg_mode=self.agg_mode, agg_value=self.agg_value)
 
     def _packet_handler(self, packet):
@@ -26,77 +48,85 @@ class SnifferOnline:
             self.dropped_packets += 1
             current_time = time.time()
             if current_time - self.last_drop_warning > 5.0:
-                print(f"\n[!] Warning: Dropped {self.dropped_packets} packets. " 
+                print(f"\n[!] Warning: Dropped {self.dropped_packets} packets. "
                       "Consider increasing throughput (e.g., smaller aggregation value).")
                 self.last_drop_warning = current_time
 
-    def _flow_processing_worker(self):
-        """Background thread to consume packets and generate feature vectors."""
-        print(f"[*] Online Worker started. Mode: {self.agg_mode}, Value: {self.agg_value}")
-        
+    # ------------------------------------------------------------------
+    # MODE "raw" - per-pakiet (CNN)
+    # ------------------------------------------------------------------
+    def _raw_packet_worker(self):
+        print("[*] Online Worker started (raw per-packet mode).")
         while not self.stop_sniffing:
             try:
                 packet = self.packet_queue.get(timeout=1.0)
                 if packet is None:
                     continue
-                
+                self.packet_callback(packet)
+                self.packet_queue.task_done()
+            except queue.Empty:
+                continue
+
+    # ------------------------------------------------------------------
+    # MODE "flow" - agregacja przepływów (RF)
+    # ------------------------------------------------------------------
+    def _flow_processing_worker(self):
+        print(f"[*] Online Worker started (flow mode). Mode: {self.agg_mode}, Value: {self.agg_value}")
+
+        while not self.stop_sniffing:
+            try:
+                packet = self.packet_queue.get(timeout=1.0)
+                if packet is None:
+                    continue
+
                 flow_key = self.feature_extractor._get_flow_key(packet)
-                if not flow_key: 
+                if not flow_key:
                     continue
 
                 if flow_key not in self.active_flows:
                     self.active_flows[flow_key] = []
-                    
+
                 self.active_flows[flow_key].append(packet)
                 flow_packets = self.active_flows[flow_key]
 
                 flush_flow = False
-                
                 if self.agg_mode == "packet":
-                    if len(flow_packets) >= self.agg_value:
-                        flush_flow = True
-                        
+                    flush_flow = len(flow_packets) >= self.agg_value
                 elif self.agg_mode == "time":
                     time_diff = float(flow_packets[-1].time - flow_packets[0].time)
-                    if time_diff >= self.agg_value:
-                        flush_flow = True
+                    flush_flow = time_diff >= self.agg_value
 
                 if flush_flow:
                     features = self.feature_extractor._calculate_features(flow_packets)
-                    self.active_flows[flow_key] = [] 
-                    
-                    if self.prediction_callback:
-                        self.prediction_callback(features, flow_key)
-                    else:
-                        print(f"[+] New Flow Aggregate Ready -> Features extracted: {len(features)}")
-                    
+                    self.active_flows[flow_key] = []
+                    self.prediction_callback(features, flow_key)
+
+                self.packet_queue.task_done()
+
             except queue.Empty:
-                # === GARBAGE COLLECTOR DLA TRYBU TIME ===
                 if self.agg_mode == "time":
                     keys_to_flush = []
                     for key, pkts in self.active_flows.items():
-                        if len(pkts) < 2: continue
-                        # Sprawdzamy czy czas od pierwszego do ostatniego pakietu przekroczył agg_value
+                        if len(pkts) < 2:
+                            continue
                         duration = float(pkts[-1].time - pkts[0].time)
                         if duration >= self.agg_value:
                             keys_to_flush.append(key)
-                            
+
                     for key in keys_to_flush:
                         flow_packets = self.active_flows[key]
                         features = self.feature_extractor._calculate_features(flow_packets)
-                        self.active_flows[key] = [] # Reset 
-                        
-                        if self.prediction_callback:
-                            self.prediction_callback(features, key)
-                        else:
-                            print(f"[+] Auto-Flush (Time) -> Features: {len(features)}")
+                        self.active_flows[key] = []
+                        self.prediction_callback(features, key)
 
+    # ------------------------------------------------------------------
     def start_capture(self):
-        print(f"[*] Starting online capture on interface: {self.interface or 'default'}")
-        
-        self.worker_thread = threading.Thread(target=self._flow_processing_worker, daemon=True)
+        print(f"[*] Starting online capture on interface: {self.interface or 'default'} (mode={self.mode})")
+
+        worker_fn = self._raw_packet_worker if self.mode == "raw" else self._flow_processing_worker
+        self.worker_thread = threading.Thread(target=worker_fn, daemon=True)
         self.worker_thread.start()
-        
+
         sniff(
             iface=self.interface,
             filter="ip or ip6",
@@ -104,7 +134,7 @@ class SnifferOnline:
             store=False,
             stop_filter=lambda x: self.stop_sniffing
         )
-        
+
     def stop_capture(self):
         self.stop_sniffing = True
         try:

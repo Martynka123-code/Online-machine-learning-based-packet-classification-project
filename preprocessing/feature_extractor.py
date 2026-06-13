@@ -1,6 +1,7 @@
 import warnings
 import psutil
 import socket
+from collections import Counter
 
 warnings.filterwarnings("ignore")
 
@@ -15,18 +16,10 @@ from preprocessing.offline_processor import OfflineProcessor
 from preprocessing.flow_keys import get_flow_key
 from scapy.layers.inet import IP
 from scapy.layers.inet6 import IPv6
+from scapy.utils import PcapReader
 
 
 class FlowFeatureExtractor:
-    """
-    Main feature extraction class.
-
-    Supports:
-    - offline PCAP -> CSV extraction
-    - online live packet classification
-    - packet aggregation
-    - time aggregation
-    """
 
     def __init__(
             self,
@@ -39,20 +32,61 @@ class FlowFeatureExtractor:
         self.label = label
         self.agg_mode = agg_mode
         self.agg_value = agg_value
-        
-        # Automatyczne pobranie adresów IP tego komputera
-        self.local_ips = self._get_local_ips()
 
+        if self.pcap_path is not None:
+            # OFFLINE: lokalny IP wykrywamy z TEGO KONKRETNEGO pliku pcap,
+            # bo każdy plik mógł być nagrany na innej maszynie/sieci.
+            self.local_ips = self._detect_local_ips_from_pcap(self.pcap_path)
+        else:
+            # ONLINE: lokalny IP to IP maszyny, na której teraz działamy.
+            self.local_ips = self._get_local_ips()
+
+    # ------------------------------------------------------------------
+    # ONLINE: jak było
+    # ------------------------------------------------------------------
     def _get_local_ips(self) -> set:
-        """Pobiera wszystkie lokalne adresy IP (IPv4 i IPv6) tego komputera."""
         ips = set()
         for addrs in psutil.net_if_addrs().values():
             for addr in addrs:
                 if addr.family in (socket.AF_INET, socket.AF_INET6):
-                    # Pomijamy localhost (127.0.0.1)
                     if not addr.address.startswith("127.") and addr.address != "::1":
-                        ips.add(addr.address.split('%')[0]) 
+                        ips.add(addr.address.split('%')[0])
         return ips
+
+    # ------------------------------------------------------------------
+    # OFFLINE: nowa metoda
+    # ------------------------------------------------------------------
+    def _detect_local_ips_from_pcap(self, pcap_path) -> set:
+        """
+        Skanuje pcap i wybiera najczęściej występujący adres IPv4 oraz IPv6
+        jako 'lokalny' (czyli adres maszyny, która nagrywała ten plik).
+        Robione per-plik, bo każdy plik może mieć inny lokalny IP.
+        """
+        ipv4_counts = Counter()
+        ipv6_counts = Counter()
+
+        with PcapReader(pcap_path) as reader:
+            for pkt in reader:
+                if pkt.haslayer(IP):
+                    ipv4_counts[pkt[IP].src] += 1
+                    ipv4_counts[pkt[IP].dst] += 1
+                elif pkt.haslayer(IPv6):
+                    ipv6_counts[pkt[IPv6].src] += 1
+                    ipv6_counts[pkt[IPv6].dst] += 1
+
+        local_ips = set()
+        if ipv4_counts:
+            local_ips.add(ipv4_counts.most_common(1)[0][0])
+        if ipv6_counts:
+            local_ips.add(ipv6_counts.most_common(1)[0][0])
+
+        if local_ips:
+            print(f"[+] [{pcap_path}] Wykryty lokalny IP: {local_ips}")
+        else:
+            print(f"[!] [{pcap_path}] Nie wykryto lokalnego IP — "
+                  f"fwd/bwd ratio spadnie do fallbacku 0.5/0.5.")
+
+        return local_ips
 
     # ------------------------------------------------------------------
     # Compatibility for ONLINE mode (Sniffer)
