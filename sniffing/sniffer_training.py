@@ -24,7 +24,7 @@ class SnifferTraining:
         self.target_apps = [a.lower() for a in target_apps]
         self.local_ips = self._get_local_ips()
         self.port_map = {}
-        self.flow_cache = {}
+        self.flow_cache = {} 
         self.writers = {}
         self.active_flows = defaultdict(lambda: {"pkt_count": 0, "bytes": 0, "start": None})
         self.stop_event = threading.Event()
@@ -65,28 +65,44 @@ class SnifferTraining:
         return (min(a, b), max(a, b), pr)
 
     def _handle_packet(self, packet):
-        if not (packet.haslayer(IP) or packet.haslayer(IPv6)) or not (packet.haslayer(TCP) or packet.haslayer(UDP)):
+        if not (packet.haslayer(IP) or packet.haslayer(IPv6)):
             return
-
+        if not (packet.haslayer(TCP) or packet.haslayer(UDP)):
+            return
+ 
         ip_layer = packet[IP] if packet.haslayer(IP) else packet[IPv6]
-        layer = packet[TCP] if packet.haslayer(TCP) else packet[UDP]
-        proto = "TCP" if packet.haslayer(TCP) else "UDP"
-        
+        layer    = packet[TCP] if packet.haslayer(TCP) else packet[UDP]
+        proto    = "TCP" if packet.haslayer(TCP) else "UDP"
+ 
         src_ip, dst_ip = ip_layer.src, ip_layer.dst
-        sport, dport = layer.sport, layer.dport
-        
+        sport, dport   = layer.sport, layer.dport
         key = self._get_flow_key(src_ip, dst_ip, sport, dport, proto)
-        app = self.flow_cache.get(key)
-
-        if not app:
+ 
+        now = time.time()
+ 
+        # Sprawdź TTL — usuń wygasłe wpisy
+        cached = self.flow_cache.get(key)
+        if cached is not None:
+            app_name, last_seen = cached
+            if now - last_seen > self.FLOW_TTL:
+                del self.flow_cache[key]
+                cached = None
+ 
+        app = None
+        if cached is not None:
+            app, _ = cached
+            # Odśwież timestamp
+            self.flow_cache[key] = (app, now)
+        else:
             local_port = sport if src_ip in self.local_ips else dport
             with self.lock:
                 app = self.port_map.get(local_port)
             if app:
-                self.flow_cache[key] = app
-
+                self.flow_cache[key] = (app, now)
+ 
         if app:
             self._save_raw_pcap(app, packet)
+
 
     def _save_raw_pcap(self, app, packet):
         date_str = datetime.now().strftime("%Y-%m-%d")

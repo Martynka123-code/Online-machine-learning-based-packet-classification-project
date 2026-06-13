@@ -2,7 +2,7 @@
 offline_evaluator.py
 --------------------
 Główna logika ewaluacji modeli RF i CNN na plikach PCAP.
-Zwraca słownik wynikowy - raportowanie jest w report_generator.py
+Zwraca słownik wynikowy — raportowanie jest w report_generator.py
 """
 
 import os
@@ -16,9 +16,12 @@ from models.rf_online import RandomForestOnline
 from models.cnn_online import CNNOnline
 
 
-def evaluate_rf(packets, model_path, agg_mode, agg_value):
+def evaluate_rf(packets, model_path, agg_mode, agg_value, pcap_path=None):
     """
     Klasyfikuje pakiety modelem Random Forest.
+
+    POPRAWKA: pcap_path przekazywany do FlowFeatureExtractor,
+    żeby lokalny IP był wykrywany z pliku pcap a nie z psutil maszyny.
 
     Returns:
         list of (prediction, confidence)
@@ -28,8 +31,10 @@ def evaluate_rf(packets, model_path, agg_mode, agg_value):
 
     model = RandomForestOnline(model_path)
     extractor = FlowFeatureExtractor(
-    pcap_path=pcap_path, label=None,
-    agg_mode=agg_mode, agg_value=agg_value
+        pcap_path=pcap_path,
+        label=None,
+        agg_mode=agg_mode,
+        agg_value=agg_value
     )
 
     results = []
@@ -90,17 +95,6 @@ def evaluate_cnn(packets, model_path, class_map_path):
 def evaluate_pcap(pcap_path, true_label, model_type, model_params):
     """
     Ewaluuje jeden plik PCAP i zwraca słownik ze statystykami.
-
-    Args:
-        pcap_path (str):     Ścieżka do pliku .pcap
-        true_label (str):    Prawdziwa klasa ruchu (np. "spotify")
-        model_type (str):    "rf" lub "cnn"
-        model_params (dict): Parametry modelu:
-                             - RF: {"agg_mode": "packet"/"time", "agg_value": int/float}
-                             - CNN: (brak dodatkowych - ścieżki z configu)
-
-    Returns:
-        dict ze statystykami lub None przy błędzie
     """
     true_label = true_label.strip().lower()
     pcap_name = os.path.basename(pcap_path)
@@ -121,10 +115,12 @@ def evaluate_pcap(pcap_path, true_label, model_type, model_params):
         )
         model_path = os.path.join(MODELS_DIR, model_name)
         print(f"  [*] Klasyfikacja RF [{agg_mode}, val={agg_value}] ...")
-        raw_results = evaluate_rf(packets, model_path, agg_mode, agg_value)
+        # POPRAWKA: przekazujemy pcap_path żeby FlowFeatureExtractor wykrył lokalny IP z pliku
+        raw_results = evaluate_rf(packets, model_path, agg_mode, agg_value, pcap_path=pcap_path)
 
     elif model_type == "cnn":
         model_path = os.path.join(MODELS_DIR, "cnn_model_master.ckpt")
+        # POPRAWKA: mapa klas jest w DATA_CNN_DIR a nie DATA_CSV_DIR
         class_map_path = os.path.join(DATA_CNN_DIR, "cnn_class_map.json")
         print(f"  [*] Klasyfikacja CNN (per-pakiet) ...")
         raw_results = evaluate_cnn(packets, model_path, class_map_path)
@@ -142,7 +138,6 @@ def evaluate_pcap(pcap_path, true_label, model_type, model_params):
     other_count = sum(counts.get(k, 0) for k in ("other", "unknown"))
     wrong_count = total - correct_count - other_count
 
-    # Pewność per-klasa (tylko RF przekazuje sensowne confidence)
     class_confidence = {}
     if model_type == "rf":
         conf_buckets = {}

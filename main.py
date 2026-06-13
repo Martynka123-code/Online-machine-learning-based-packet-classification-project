@@ -67,43 +67,37 @@ def menu_extract_features():
 def menu_extract_features_cnn():
     """Option 3: Convert ALL available PCAP files into a single master NPZ dataset for CNN."""
     print("\n--- Batch Feature Extraction for CNN (All PCAPs to Single Master NPZ) ---")
-
+ 
     files = [f for f in os.listdir(DATA_RAW_DIR) if f.endswith('.pcap')]
     if not files:
         print(f"[!] No PCAP files found in {DATA_RAW_DIR}")
         return
-
-    # 1. Automatically detect unique applications based on the filename structure (app_date.pcap)
+ 
     detected_apps = sorted(list(set([os.path.splitext(f)[0].split('_')[0] for f in files])))
-
-    # 2. Dynamically build a class-to-index mapping dictionary
     class_map = {app_name: idx for idx, app_name in enumerate(detected_apps)}
-
+ 
     print("\n[+] Automatically discovered applications and assigned indices:")
     for app_name, idx in class_map.items():
         print(f"  Class {idx}: {app_name}")
-
-    # Save the class map to a JSON file so the online module knows which index maps to which app
-    map_path = os.path.join(DATA_CSV_DIR, "cnn_class_map.json")
+ 
+    map_path = os.path.join(DATA_CNN_DIR, "cnn_class_map.json")
     with open(map_path, 'w') as f:
         json.dump(class_map, f, indent=4)
     print(f"[+] Class mapping dictionary saved to: {map_path}")
-
-    # 3. Initialize preprocessor and loop through all PCAP files to accumulate data
+ 
     preprocessor = CNNPreprocessor(max_length=1000)
     print("\n[*] Processing PCAP files into a combined memory array...")
-
+ 
     for f in files:
         app_name = os.path.splitext(f)[0].split('_')[0]
         label_idx = class_map[app_name]
         pcap_path = os.path.join(DATA_RAW_DIR, f)
-
-        # This will append tensors and labels internally into preprocessor.data and preprocessor.labels
         preprocessor.process_pcap(pcap_path, label_idx)
-
-    # 4. Save everything into one combined master dataset file
+ 
     output_npz = os.path.join(DATA_CNN_DIR, f"cnn_dataset_{datetime.now().strftime('%Y-%m-%d')}_master.npz")
     preprocessor.save_dataset(output_npz)
+ 
+
 
 
 def menu_validate_datasets():
