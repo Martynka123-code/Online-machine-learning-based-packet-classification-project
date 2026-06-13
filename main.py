@@ -19,6 +19,9 @@ from visualization.cnn_visualizer import (
     plot_cnn_confusion_matrix,
     plot_cnn_f1_per_class,
 )
+from pytorch_lightning import Trainer
+from pytorch_lightning.loggers import CSVLogger
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 # Import configuration and custom modules
 from config import DATA_CNN_DIR, DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES

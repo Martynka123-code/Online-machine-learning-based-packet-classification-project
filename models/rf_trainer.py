@@ -172,11 +172,12 @@ class RandomForestTrainer:
         )
 
         param_grid = {
-            "n_estimators": [100, 200],
-            "max_depth": [5, 8, 12],
-            "min_samples_split": [10, 20, 30],
-            "min_samples_leaf": [5, 10, 15],
-            "max_features": ["sqrt"]
+            "n_estimators": [100, 200, 300],
+            "max_depth": [6, 8, 10], 
+            "min_samples_split": [15, 30, 50], 
+            "min_samples_leaf": [5, 10, 20],
+            "max_features": ["sqrt", "log2"],
+            "max_samples": [0.6, 0.8]
         }
 
         cv = GroupKFold(n_splits=5)
