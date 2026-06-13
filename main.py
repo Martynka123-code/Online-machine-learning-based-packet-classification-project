@@ -11,6 +11,8 @@ import numpy as np
 from pytorch_lightning.loggers import CSVLogger
 from sklearn.metrics import classification_report
 
+from visualization.live_dashboard import LiveAccuracyDashboard
+
 from pytorch_lightning.callbacks import LearningRateMonitor
 from visualization.confusion_matrix_plot import plot_confusion_matrix
 from models.cnn_trainer import OptimizedPacketCNN, PacketByteDataset, MetricsCallback
@@ -357,6 +359,8 @@ def menu_online_mode():
 
     classifier = RandomForestOnline(model_path)
 
+    dashboard = LiveAccuracyDashboard(title="Live Monitor - Random Forest")
+
     def on_flow_ready(features, flow_key):
         result = classifier.classify_stream(features)
         pred = result.get("prediction", "UNKNOWN")
@@ -367,6 +371,7 @@ def menu_online_mode():
             f"[LIVE] Flow {flow_key[4]}: {flow_key[0]}:{flow_key[2]} <-> {flow_key[1]}:{flow_key[3]} | "
             f"App: {pred} ({conf * 100:.1f}%) | Szczegóły: [{probs_str}]"
         )
+        dashboard.push(pred, conf, meta=f"{flow_key[0]}:{flow_key[2]} <-> {flow_key[1]}:{flow_key[3]}")
 
     print(f"[*] Loaded model: {model_path}")
     sniffer = SnifferOnline(agg_mode=agg_mode, agg_value=agg_value,
@@ -380,10 +385,12 @@ def menu_online_mode():
         except Exception:
             pass
 
+    capture_thread = threading.Thread(target=sniffer.start_capture, daemon=True)
+    capture_thread.start()
+
     try:
-        sniffer.start_capture()
-    except KeyboardInterrupt:
-        print("\n[*] Stopping capture...")
+        dashboard.run()
+    finally:
         sniffer.stop_capture()
 
 
@@ -401,6 +408,9 @@ def menu_online_mode_cnn():
     classifier = CNNOnline(model_path, class_map_path)
     if classifier.model is None:
         return
+
+    from visualization.live_dashboard import LiveAccuracyDashboard
+    dashboard = LiveAccuracyDashboard(title="Live Monitor - CNN")
 
     from scapy.layers.inet import IP, TCP, UDP
     from scapy.layers.inet6 import IPv6
@@ -422,13 +432,16 @@ def menu_online_mode_cnn():
             src, dst = "unknown", "unknown"
 
         print(f"[LIVE-CNN] {src}:{sport} -> {dst}:{dport} ({proto}) | App: {app_name.upper()} ({confidence * 100:.1f}%)")
+        dashboard.push(app_name, confidence, meta=f"{src}:{sport} -> {dst}:{dport} ({proto})")
 
     sniffer = SnifferOnline(mode="raw", packet_callback=on_packet)
 
+    capture_thread = threading.Thread(target=sniffer.start_capture, daemon=True)
+    capture_thread.start()
+
     try:
-        sniffer.start_capture()
-    except KeyboardInterrupt:
-        print("\n[*] Stopping live CNN capture...")
+        dashboard.run()
+    finally:
         sniffer.stop_capture()
 
 
