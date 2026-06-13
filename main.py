@@ -8,6 +8,11 @@ import json
 from scapy.all import sniff
 import numpy as np
 
+from pytorch_lightning.loggers import CSVLogger
+from sklearn.metrics import classification_report
+
+from visualization.confusion_matrix_plot import plot_confusion_matrix
+
 # Import configuration and custom modules
 from config import DATA_CNN_DIR, DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
 from models.cnn_online import CNNOnline
@@ -166,8 +171,8 @@ def menu_train_cnn_models():
         val_size = len(full_dataset) - train_size
         train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
 
-        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=0)
-        val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=0)
+        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=0)
+        val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=0)
     except Exception as e:
         print(f"[ERROR] Failed to prepare DataLoaders: {e}")
         return
@@ -184,84 +189,22 @@ def menu_train_cnn_models():
 
     model = OptimizedPacketCNN(output_dim=output_dim, signal_length=1000)
 
-    from models.cnn_trainer import MetricsCallback
-    metrics_cb = MetricsCallback()
-
     print("\n[*] Starting PyTorch Lightning Training Session...")
-    trainer = Trainer(max_epochs=epochs, accelerator="auto", devices=1, callbacks=[metrics_cb])
+    trainer = Trainer(max_epochs=epochs, accelerator="auto", devices=1)
 
     try:
         trainer.fit(model, train_loader, val_loader)
 
+        # 5. Save the trained checkpoint
         model_base_name = os.path.splitext(dataset_file)[0].replace("cnn_dataset_", "")
         model_save_path = os.path.join(MODELS_DIR, f"cnn_model_{model_base_name}.ckpt")
         trainer.save_checkpoint(model_save_path)
         print(f"\n[+] CNN Training complete! Checkpoint saved to: {model_save_path}")
 
-        # --- Visualizations ---
-        from visualization.cnn_visualizer import (
-            plot_cnn_training_curves,
-            plot_cnn_class_distribution,
-            plot_cnn_confusion_matrix,
-            plot_cnn_f1_per_class,
-        )
-
-        tag = f"cnn_{model_base_name}"
-
-        if metrics_cb.history["train_loss"]:
-            plot_cnn_training_curves(
-                train_losses=metrics_cb.history["train_loss"],
-                val_losses=metrics_cb.history["val_loss"],
-                val_accuracies=metrics_cb.history["val_acc"],
-                val_f1_scores=metrics_cb.history["val_f1_macro"] or None,
-                reports_dir="reports",
-                tag=tag,
-            )
-
-        class_map_path = os.path.join(DATA_CNN_DIR, "cnn_class_map.json")
-        if os.path.exists(class_map_path):
-            import json
-            with open(class_map_path) as f:
-                class_map = json.load(f)
-
-            plot_cnn_class_distribution(
-                labels=full_dataset.labels,
-                class_map=class_map,
-                reports_dir="reports",
-                tag=tag,
-            )
-
-            # Confusion matrix + per-class F1 on validation split
-            model.eval()
-            all_preds, all_true = [], []
-            with torch.no_grad():
-                for batch in val_loader:
-                    x = batch["feature"].float()
-                    y = batch["label"].long()
-                    logits = model(x)
-                    preds = torch.argmax(logits, dim=1)
-                    all_preds.extend(preds.cpu().numpy())
-                    all_true.extend(y.cpu().numpy())
-
-            plot_cnn_confusion_matrix(
-                y_true=all_true,
-                y_pred=all_preds,
-                class_map=class_map,
-                reports_dir="reports",
-                tag=tag,
-            )
-
-            plot_cnn_f1_per_class(
-                y_true=all_true,
-                y_pred=all_preds,
-                class_map=class_map,
-                reports_dir="reports",
-                tag=tag,
-            )
-
     except Exception as e:
         print(f"[!] Training interrupted or failed: {e}")
-        
+
+
 def menu_online_mode():
     """Option 5: Live classification with asynchronous packet processing buffer."""
     print("\n--- Online Classification (Real-time) ---")

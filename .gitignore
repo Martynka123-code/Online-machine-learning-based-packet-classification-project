@@ -11,3 +11,6 @@ lightning_logs/
 *.csv
 lightning_logs/*.npz
 lightning_logs/
+*.ckpt
+*.ckpt
+*.pcap
