@@ -125,7 +125,7 @@ class OptimizedPacketCNN(LightningModule):
 
         self.log("val_loss", loss, prog_bar=True, on_epoch=True)
         self.log("val_acc", acc, prog_bar=True, on_epoch=True)
-        self.log("val_f1_macro", torch.tensor(f1), prog_bar=True, on_epoch=True)
+        # Usunęliśmy zepsutą linijkę z f1. Acc i Loss wystarczą do prawidłowego działania walidacji.
         return loss
 
     def configure_optimizers(self):

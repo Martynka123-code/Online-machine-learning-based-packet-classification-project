@@ -174,6 +174,10 @@ def calculate_features(packets, label, local_ip):
 
     feats["actual_packets_in_flow"] = len(packets)
     feats["label"] = label
+    
+    if packets:
+        feats["flow_id"] = str(get_flow_key(packets[0]))
+    
     return feats
 
 

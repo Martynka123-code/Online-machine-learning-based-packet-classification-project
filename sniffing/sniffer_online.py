@@ -71,7 +71,25 @@ class SnifferOnline:
                         print(f"[+] New Flow Aggregate Ready -> Features extracted: {len(features)}")
                     
             except queue.Empty:
-                pass
+                # === GARBAGE COLLECTOR DLA TRYBU TIME ===
+                if self.agg_mode == "time":
+                    keys_to_flush = []
+                    for key, pkts in self.active_flows.items():
+                        if len(pkts) < 2: continue
+                        # Sprawdzamy czy czas od pierwszego do ostatniego pakietu przekroczył agg_value
+                        duration = float(pkts[-1].time - pkts[0].time)
+                        if duration >= self.agg_value:
+                            keys_to_flush.append(key)
+                            
+                    for key in keys_to_flush:
+                        flow_packets = self.active_flows[key]
+                        features = self.feature_extractor._calculate_features(flow_packets)
+                        self.active_flows[key] = [] # Reset 
+                        
+                        if self.prediction_callback:
+                            self.prediction_callback(features, key)
+                        else:
+                            print(f"[+] Auto-Flush (Time) -> Features: {len(features)}")
 
     def start_capture(self):
         print(f"[*] Starting online capture on interface: {self.interface or 'default'}")
