@@ -1,7 +1,8 @@
 import queue
 import time
-import threading
-from scapy.all import sniff
+import socket
+from scapy.all import get_if_list, get_if_addr
+from scapy.sendrecv import sniff
 from preprocessing.feature_extractor import FlowFeatureExtractor
 
 
@@ -51,6 +52,28 @@ class SnifferOnline:
                 print(f"\n[!] Warning: Dropped {self.dropped_packets} packets. "
                       "Consider increasing throughput (e.g., smaller aggregation value).")
                 self.last_drop_warning = current_time
+
+    def _detect_active_iface(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        try:
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+        finally:
+            s.close()
+
+        for iface in get_if_list():
+            try:
+                iface_ip = get_if_addr(iface)
+
+                if iface_ip == local_ip:
+                    print(f"[*] Wykryto aktywną kartę: {iface} ({iface_ip})")
+                    return iface
+
+            except Exception:
+                continue
+
+        return None
 
     # ------------------------------------------------------------------
     # MODE "raw" - per-pakiet (CNN)
@@ -124,18 +147,20 @@ class SnifferOnline:
 
     # ------------------------------------------------------------------
     def start_capture(self):
-        print(f"[*] Starting online capture on interface: {self.interface or 'default'} (mode={self.mode})")
 
-        worker_fn = self._raw_packet_worker if self.mode == "raw" else self._flow_processing_worker
-        self.worker_thread = threading.Thread(target=worker_fn, daemon=True)
-        self.worker_thread.start()
+        if not self.interface:
+            self.interface = self._detect_active_iface()
+
+        if not self.interface:
+            print("[!] Nie udało się wykryć aktywnej karty, używam domyślnej.")
+
+        print(f"[*] Starting capture on: {self.interface}")
 
         sniff(
-            iface=self.interface,
-            filter="ip or ip6",
             prn=self._packet_handler,
             store=False,
-            stop_filter=lambda x: self.stop_sniffing
+            iface=self.interface,
+            promisc=True
         )
 
     def stop_capture(self):
