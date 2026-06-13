@@ -202,6 +202,14 @@ class FlowFeatureExtractorOffline:
         features["agg_value"] = self.agg_value
         features["label"]     = self.label
 
+        if packets:
+            features["flow_id"] = str(self._get_canonical_key(packets[0]))
+        else:
+            features["flow_id"] = "unknown"
+        # ==========================
+
+        features["label"]     = self.label
+
         return features
 
     # ------------------------------------------------------------------

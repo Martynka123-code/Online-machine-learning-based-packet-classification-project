@@ -1,4 +1,6 @@
 import warnings
+import psutil
+import socket
 
 warnings.filterwarnings("ignore")
 
@@ -10,8 +12,9 @@ from preprocessing.tcp_features import (
 )
 from preprocessing.burst import burst_features
 from preprocessing.offline_processor import OfflineProcessor
-# Dodajemy import funkcji wyciągającej klucz przepływu
 from preprocessing.flow_keys import get_flow_key
+from scapy.layers.inet import IP
+from scapy.layers.inet6 import IPv6
 
 
 class FlowFeatureExtractor:
@@ -32,11 +35,24 @@ class FlowFeatureExtractor:
             agg_mode="packet",
             agg_value=100
     ):
-
         self.pcap_path = pcap_path
         self.label = label
         self.agg_mode = agg_mode
         self.agg_value = agg_value
+        
+        # Automatyczne pobranie adresów IP tego komputera
+        self.local_ips = self._get_local_ips()
+
+    def _get_local_ips(self) -> set:
+        """Pobiera wszystkie lokalne adresy IP (IPv4 i IPv6) tego komputera."""
+        ips = set()
+        for addrs in psutil.net_if_addrs().values():
+            for addr in addrs:
+                if addr.family in (socket.AF_INET, socket.AF_INET6):
+                    # Pomijamy localhost (127.0.0.1)
+                    if not addr.address.startswith("127.") and addr.address != "::1":
+                        ips.add(addr.address.split('%')[0]) 
+        return ips
 
     # ------------------------------------------------------------------
     # Compatibility for ONLINE mode (Sniffer)
@@ -54,11 +70,23 @@ class FlowFeatureExtractor:
     # ------------------------------------------------------------------
 
     def calculate_features(self, packets):
-
-        fwd_packets, bwd_packets = split_by_direction(
-            packets
-        )
-
+        
+        fwd_packets, bwd_packets = [], []
+        
+        for p in packets:
+            if p.haslayer(IP):
+                src_ip = p[IP].src
+            elif p.haslayer(IPv6):
+                src_ip = p[IPv6].src
+            else:
+                continue
+                
+            # Jeśli pakiet idzie od nas (nasze IP), to jest to FWD (Upload)
+            if src_ip in self.local_ips:
+                fwd_packets.append(p)
+            else:
+                bwd_packets.append(p)
+                
         features = {}
 
         # --------------------------------------------------------------
@@ -165,6 +193,12 @@ class FlowFeatureExtractor:
         features["agg_value"] = (
             self.agg_value
         )
+
+        if packets:
+            features["flow_id"] = str(get_flow_key(packets[0]))
+        else:
+            features["flow_id"] = "unknown"
+        # ==========================
 
         if self.label is not None:
             features["label"] = self.label
