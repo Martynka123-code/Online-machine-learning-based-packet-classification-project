@@ -1,19 +1,11 @@
 import os
 import numpy as np
-
 import matplotlib
 matplotlib.use("Agg")
-
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-
-def plot_feature_correlation(
-    X_before,
-    X_after,
-    reports_dir,
-    tag
-):
+def plot_feature_correlation(X_before, X_after, reports_dir, tag):
     """Plots correlation heatmaps before vs after feature removal."""
 
     corr_before = X_before.corr(method="pearson")
@@ -24,25 +16,24 @@ def plot_feature_correlation(
 
     cell_size = 0.85
 
-    fig, axes = plt.subplots(
-        1,
-        2,
-        figsize=(
-            n_before * cell_size +
-            n_after * cell_size + 2,
-            max(n_before, n_after) *
-            cell_size + 2
-        )
-    )
+    # Obliczanie szerokości z uwzględnieniem miejsca na pojedynczy cbar (+1)
+    fig_width = n_before * cell_size + n_after * cell_size + 3
+    fig_height = max(n_before, n_after) * cell_size + 2
 
-    for ax, corr, title in [
-        (axes[0], corr_before, f"BEFORE ({n_before} features)"),
-        (axes[1], corr_after, f"AFTER ({n_after} features)")
-    ]:
+    fig, axes = plt.subplots(1, 2, figsize=(fig_width, fig_height))
+    
+    # Zabezpieczenie: spłaszczamy axes do 1D, na wypadek nietypowego zachowania matplotlib
+    axes = axes.flatten()
 
-        mask = np.triu(
-            np.ones_like(corr, dtype=bool)
-        )
+    # Konfiguracja rysowania dla obu macierzy
+    plots_config = [
+        (axes[0], corr_before, f"BEFORE ({n_before} features)", False),
+        (axes[1], corr_after, f"AFTER ({n_after} features)", True) # Włączamy cbar tylko dla drugiego
+    ]
+
+    for ax, corr, title, show_cbar in plots_config:
+        # Maska dla dolnego trójkąta (ukrywamy górny trójkąt korelacji, bo jest lustrzany)
+        mask = np.triu(np.ones_like(corr, dtype=bool))
 
         sns.heatmap(
             corr,
@@ -57,17 +48,20 @@ def plot_feature_correlation(
             ax=ax,
             vmin=-1,
             vmax=1,
-            cbar=False
+            cbar=show_cbar,
+            cbar_kws={"shrink": 0.7} if show_cbar else None # Estetyczne zmniejszenie paska
         )
 
-        ax.set_title(title)
+        ax.set_title(title, fontsize=11, fontweight='bold', pad=10)
 
-        ax.tick_params(
-            axis="x",
-            rotation=45,
-            labelsize=7
+        # Poprawione: ha='right' sprawia, że skośne napisy idealnie trafiają w środek kolumny
+        ax.set_xticklabels(
+            ax.get_xticklabels(), 
+            rotation=45, 
+            horizontalalignment='right', 
+            fontsize=7
         )
-
+        
         ax.tick_params(
             axis="y",
             rotation=0,
@@ -76,11 +70,10 @@ def plot_feature_correlation(
 
     plt.tight_layout()
 
-    path = os.path.join(
-        reports_dir,
-        f"feature_correlation_{tag}.png"
-    )
+    # Tworzenie katalogu na raporty, jeśli nie istnieje
+    os.makedirs(reports_dir, exist_ok=True)
 
+    path = os.path.join(reports_dir, f"feature_correlation_{tag}.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
 

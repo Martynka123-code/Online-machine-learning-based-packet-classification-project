@@ -1,32 +1,13 @@
 """
 pcap_compare.py
 ===============
-Standalone PCAP comparison analysis tool.
+Standalone PCAP comparison analysis tool for Incoming (BWD) Traffic.
 
 Usage:
-    python pcap_compare.py                         # reads from data/pcap_to_compare/
-    python pcap_compare.py --input my/folder       # custom input folder
+    python pcap_compare.py                  # reads from data/pcap_to_compare/
+    python pcap_compare.py --input my/folder   # custom input folder
     python pcap_compare.py --gran 50               # custom packet granularity
     python pcap_compare.py --output reports/cmp    # custom output folder
-
-Structure expected:
-    data/pcap_to_compare/
-        youtube_20240101.pcap
-        netflix_20240101.pcap
-        spotify_20240101.pcap
-        ...
-    Class name is taken from the filename prefix (before first underscore or the full stem).
-
-Output:
-    reports/comparison/
-        summary_statistics.csv          – per-class per-feature stats (mean, std, median)
-        feature_discrimination.csv      – KW test + effect size (eta²) for each feature
-        boxplots_top12.png              – side-by-side boxplots for top 12 features
-        violin_top6.png                 – violin plots for top 6 features
-        heatmap_mean_normalized.png     – heatmap of normalized means (classes × features)
-        pairplot_top5.png               – pairplot for top 5 discriminating features
-        class_distribution.png         – sample count per class
-        feature_discrimination_bar.png – bar chart of top 20 η² scores
 """
 
 import os
@@ -49,7 +30,7 @@ from scapy.layers.inet6 import IPv6
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────
-#  Colour palette  (one colour per class)
+# Colour palette (one colour per class)
 # ─────────────────────────────────────────────
 PALETTE = [
     "#2196F3", "#E91E63", "#4CAF50", "#FF9800", "#9C27B0",
@@ -59,7 +40,7 @@ PALETTE = [
 
 
 # ═══════════════════════════════════════════════════════════════
-#  LOW-LEVEL HELPERS  (ported from preprocessing/)
+# LOW-LEVEL HELPERS
 # ═══════════════════════════════════════════════════════════════
 
 def get_flow_key(packet):
@@ -103,9 +84,9 @@ def direction_stats(pkts, prefix):
                 "iat_mean", "iat_std", "iat_median", "iat_cov"]
         return {f"{prefix}_{k}": 0.0 for k in keys}
 
-    lens    = [len(p) for p in pkts]
-    payloads= [get_payload_len(p) for p in pkts]
-    iats    = [float(pkts[i].time - pkts[i-1].time) for i in range(1, len(pkts))]
+    lens     = [len(p) for p in pkts]
+    payloads = [get_payload_len(p) for p in pkts]
+    iats     = [float(pkts[i].time - pkts[i-1].time) for i in range(1, len(pkts))]
     if not iats:
         iats = [0.0]
 
@@ -127,23 +108,25 @@ def direction_stats(pkts, prefix):
     }
 
 
-def calculate_features(packets, label):
-    """Full feature vector matching RandomForestTrainer's pipeline."""
+def calculate_features(packets, label, local_ip):
+    """Full feature vector matching RandomForestTrainer's pipeline (FIXED DIRECTION STABILITY)."""
     if not packets:
         return None
 
-    # Split fwd / bwd
-    first_key = get_flow_key(packets[0])
-    if first_key is None:
-        return None
-    init_ip = first_key[0]
-
     fwd, bwd = [], []
     for p in packets:
-        k = get_flow_key(p)
-        if k is None:
+        if p.haslayer(IP):
+            src_ip = p[IP].src
+        elif p.haslayer(IPv6):
+            src_ip = p[IPv6].src
+        else:
             continue
-        (fwd if k[0] == init_ip else bwd).append(p)
+        
+        # POPRAWKA: Jeśli pakiet pochodzi z lokalnego IP komputera -> zawsze FWD. W przeciwnym razie BWD.
+        if src_ip == local_ip:
+            fwd.append(p)
+        else:
+            bwd.append(p)
 
     feats = {}
     feats.update(direction_stats(fwd, "fwd"))
@@ -194,17 +177,32 @@ def calculate_features(packets, label):
     return feats
 
 
-# ═══════════════════════════════════════════════════════════════
-#  PCAP READER
-# ═══════════════════════════════════════════════════════════════
-
 def pcap_to_dataframe(pcap_path: str, label: str, gran: int) -> pd.DataFrame:
-    """Read a PCAP file and return a DataFrame of flow aggregates."""
+    """Read a PCAP file and return a DataFrame of flow aggregates with Auto-IP detection."""
     flows   = {}
     records = []
 
     print(f"  ↳ {Path(pcap_path).name}  (class='{label}', gran={gran})")
 
+    # KROK 1: Szybki pierwszy przebieg, aby znaleźć najczęstszy IP (IP Twojego komputera)
+    ip_counts = {}
+    with PcapReader(pcap_path) as reader:
+        for pkt in reader:
+            if pkt.haslayer(IP):
+                ip_counts[pkt[IP].src] = ip_counts.get(pkt[IP].src, 0) + 1
+                ip_counts[pkt[IP].dst] = ip_counts.get(pkt[IP].dst, 0) + 1
+            elif pkt.haslayer(IPv6):
+                ip_counts[pkt[IPv6].src] = ip_counts.get(pkt[IPv6].src, 0) + 1
+                ip_counts[pkt[IPv6].dst] = ip_counts.get(pkt[IPv6].dst, 0) + 1
+
+    if not ip_counts:
+        return pd.DataFrame()
+        
+    # Adres IP o największej liczbie wystąpień to nasz localhost
+    local_ip = max(ip_counts, key=ip_counts.get)
+    print(f"      [info] Auto-detected local client IP: {local_ip}")
+
+    # KROK 2: Właściwa ekstrakcja cech z użyciem wykrytego stałego lokalnego IP
     with PcapReader(pcap_path) as reader:
         for pkt in reader:
             key = get_flow_key(pkt)
@@ -215,29 +213,28 @@ def pcap_to_dataframe(pcap_path: str, label: str, gran: int) -> pd.DataFrame:
             flows[key].append(pkt)
 
             if len(flows[key]) >= gran:
-                row = calculate_features(flows[key], label)
+                row = calculate_features(flows[key], label, local_ip)
                 if row:
                     records.append(row)
                 flows[key] = []
 
-    # flush partial flows (≥ 5 packets)
+    # flush partial flows (>= 5 packets)
     for pkts in flows.values():
         if len(pkts) >= 5:
-            row = calculate_features(pkts, label)
+            row = calculate_features(pkts, label, local_ip)
             if row:
                 records.append(row)
 
     df = pd.DataFrame(records)
-    print(f"     → {len(df)} flow aggregates extracted")
+    print(f"      → {len(df)} flow aggregates extracted")
     return df
 
 
 # ═══════════════════════════════════════════════════════════════
-#  STATISTICS
+# STATISTICS
 # ═══════════════════════════════════════════════════════════════
 
 def compute_summary(df: pd.DataFrame, feat_cols: list) -> pd.DataFrame:
-    """Per-class mean / std / median for every feature."""
     rows = []
     for cls in sorted(df["label"].unique()):
         sub = df[df["label"] == cls][feat_cols]
@@ -256,11 +253,6 @@ def compute_summary(df: pd.DataFrame, feat_cols: list) -> pd.DataFrame:
 
 
 def compute_discrimination(df: pd.DataFrame, feat_cols: list) -> pd.DataFrame:
-    """
-    For each feature:
-      - Kruskal-Wallis H-test across all classes
-      - Eta-squared (η²) as effect size
-    """
     rows = []
     classes = df["label"].unique()
     n_total = len(df)
@@ -272,23 +264,22 @@ def compute_discrimination(df: pd.DataFrame, feat_cols: list) -> pd.DataFrame:
             continue
         try:
             stat, p = stats.kruskal(*groups)
-            # Eta-squared approximation from H
             eta2 = (stat - len(groups) + 1) / (n_total - len(groups))
             eta2 = max(0.0, eta2)
         except Exception:
             stat, p, eta2 = np.nan, np.nan, 0.0
 
-        rows.append({"feature": col, "H_stat": stat, "p_value": p, "eta2": eta2})   
+        rows.append({"feature": col, "H_stat": stat, "p_value": p, "eta2": eta2})
 
     if not rows:
-        print("\n[!] UWAGA: Zbyt mało klas (lub danych), aby obliczyć dyskryminację cech.")
+        print("\n[!] UWAGA: Zbyt mało klas lub cech do obliczenia testu Kruskala-Wallis.")
         return pd.DataFrame(columns=["feature", "H_stat", "p_value", "eta2"])
-    
+
     return pd.DataFrame(rows).sort_values("eta2", ascending=False).reset_index(drop=True)
 
 
 # ═══════════════════════════════════════════════════════════════
-#  VISUALISATIONS
+# VISUALISATIONS
 # ═══════════════════════════════════════════════════════════════
 
 def class_colours(labels):
@@ -304,27 +295,27 @@ def plot_class_distribution(df, out_dir):
     bars = ax.bar(counts.index, counts.values, color=colours, edgecolor="white", linewidth=0.8)
     ax.set_xlabel("Application class", fontsize=11)
     ax.set_ylabel("Flow aggregate count", fontsize=11)
-    ax.set_title("Sample Distribution per Class", fontsize=13, fontweight="bold")
+    ax.set_title("Sample Distribution per Class (Balanced)", fontsize=13, fontweight="bold")
     ax.tick_params(axis="x", rotation=30)
     for bar in bars:
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 5,
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
                 f"{int(bar.get_height()):,}", ha="center", va="bottom", fontsize=9)
     ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()
     path = os.path.join(out_dir, "class_distribution.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"[+] Saved → {path}")
 
 
 def plot_discrimination_bar(disc_df, out_dir, top_n=20):
     top = disc_df.head(top_n)
+    if top.empty: return
 
     fig, ax = plt.subplots(figsize=(10, max(4, len(top) * 0.45)))
     colours = ["#2196F3" if i < 5 else "#90CAF9" for i in range(len(top))]
     ax.barh(top["feature"][::-1], top["eta2"][::-1], color=colours[::-1], edgecolor="white")
     ax.set_xlabel("Eta-squared (η²) — effect size", fontsize=11)
-    ax.set_title(f"Top {top_n} Most Discriminating Features (Kruskal-Wallis)", fontsize=13, fontweight="bold")
+    ax.set_title(f"Top {len(top)} Most Discriminating Incoming Features", fontsize=13, fontweight="bold")
     ax.axvline(0.01, color="#E91E63", linestyle="--", linewidth=0.8, label="small effect (0.01)")
     ax.axvline(0.06, color="#FF9800", linestyle="--", linewidth=0.8, label="medium effect (0.06)")
     ax.axvline(0.14, color="#4CAF50", linestyle="--", linewidth=0.8, label="large effect (0.14)")
@@ -334,19 +325,18 @@ def plot_discrimination_bar(disc_df, out_dir, top_n=20):
     path = os.path.join(out_dir, "feature_discrimination_bar.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"[+] Saved → {path}")
 
 
 def plot_boxplots(df, top_feats, out_dir, top_n=12):
     feats = top_feats[:top_n]
-    n_cols = 3
+    if not feats: return
+    n_cols = min(3, len(feats))
     n_rows = int(np.ceil(len(feats) / n_cols))
     cmap   = class_colours(df["label"].unique())
     palette= [cmap[c] for c in sorted(cmap)]
 
-    fig, axes = plt.subplots(n_rows, n_cols,
-                             figsize=(n_cols * 5, n_rows * 3.5))
-    axes = axes.flatten()
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 5, n_rows * 3.5))
+    axes = np.array(axes).flatten()
 
     for i, feat in enumerate(feats):
         ax = axes[i]
@@ -368,27 +358,25 @@ def plot_boxplots(df, top_feats, out_dir, top_n=12):
         ax.set_title(feat, fontsize=9, fontweight="bold")
         ax.grid(axis="y", alpha=0.25)
 
-    # hide unused axes
     for j in range(i + 1, len(axes)):
         axes[j].set_visible(False)
 
-    fig.suptitle(f"Top {len(feats)} Discriminating Features — Boxplots", fontsize=13, fontweight="bold")
+    fig.suptitle("Incoming Features Comparison — Boxplots", fontsize=13, fontweight="bold")
     plt.tight_layout()
     path = os.path.join(out_dir, "boxplots_top12.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"[+] Saved → {path}")
 
 
 def plot_violins(df, top_feats, out_dir, top_n=6):
     feats  = top_feats[:top_n]
+    if not feats: return
     cmap   = class_colours(df["label"].unique())
-    n_cols = 2
+    n_cols = min(2, len(feats))
     n_rows = int(np.ceil(len(feats) / n_cols))
 
-    fig, axes = plt.subplots(n_rows, n_cols,
-                             figsize=(n_cols * 6, n_rows * 4))
-    axes = axes.flatten()
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 6, n_rows * 4))
+    axes = np.array(axes).flatten()
 
     for i, feat in enumerate(feats):
         ax = axes[i]
@@ -412,17 +400,16 @@ def plot_violins(df, top_feats, out_dir, top_n=6):
     for j in range(i + 1, len(axes)):
         axes[j].set_visible(False)
 
-    fig.suptitle(f"Top {len(feats)} Features — Violin Plots", fontsize=13, fontweight="bold")
+    fig.suptitle("Incoming Features — Violin Plots", fontsize=13, fontweight="bold")
     plt.tight_layout()
     path = os.path.join(out_dir, "violin_top6.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"[+] Saved → {path}")
 
 
 def plot_heatmap(df, feat_cols, out_dir, top_n=20):
-    """Normalised mean per class heatmap."""
     top_feats = feat_cols[:top_n]
+    if not top_feats: return
     classes   = sorted(df["label"].unique())
     matrix    = np.zeros((len(classes), len(top_feats)))
 
@@ -430,7 +417,6 @@ def plot_heatmap(df, feat_cols, out_dir, top_n=20):
         sub = df[df["label"] == cls][top_feats]
         matrix[ci] = sub.mean().values
 
-    # Min-max normalise per feature (column)
     col_min = matrix.min(axis=0)
     col_max = matrix.max(axis=0)
     denom   = col_max - col_min
@@ -447,10 +433,8 @@ def plot_heatmap(df, feat_cols, out_dir, top_n=20):
     ax.set_xticklabels(top_feats, rotation=45, ha="right", fontsize=8)
     ax.set_yticks(range(len(classes)))
     ax.set_yticklabels(classes, fontsize=10)
-    ax.set_title(f"Normalised Feature Means per Class (top {len(top_feats)} features)",
-                 fontsize=12, fontweight="bold")
+    ax.set_title(f"Normalised Incoming Means per Class (top {len(top_feats)})", fontsize=12, fontweight="bold")
 
-    # Annotate cells with raw value
     for ci in range(len(classes)):
         for fi in range(len(top_feats)):
             val = matrix[ci, fi]
@@ -462,15 +446,14 @@ def plot_heatmap(df, feat_cols, out_dir, top_n=20):
     path = os.path.join(out_dir, "heatmap_mean_normalized.png")
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"[+] Saved → {path}")
 
 
 def plot_pairplot(df, top_feats, out_dir, top_n=5):
     feats = top_feats[:top_n]
+    if not feats: return
     cmap  = class_colours(df["label"].unique())
     sub   = df[feats + ["label"]].dropna()
 
-    # Cap outliers at 99th percentile for readability
     for f in feats:
         cap = sub[f].quantile(0.99)
         sub[f] = sub[f].clip(upper=cap)
@@ -481,17 +464,15 @@ def plot_pairplot(df, top_feats, out_dir, top_n=5):
     g = sns.pairplot(sub, hue="label", hue_order=classes,
                      palette=dict(zip(classes, palette)),
                      plot_kws=dict(alpha=0.4, s=10, linewidth=0),
-                     diag_kind="kde",
-                     corner=True)
-    g.figure.suptitle(f"Pairplot — top {len(feats)} features", y=1.01, fontsize=12, fontweight="bold")
+                     diag_kind="kde", corner=True)
+    g.figure.suptitle(f"Pairplot — Incoming top {len(feats)} features", y=1.01, fontsize=12, fontweight="bold")
     path = os.path.join(out_dir, "pairplot_top5.png")
     g.figure.savefig(path, dpi=120, bbox_inches="tight")
     plt.close()
-    print(f"[+] Saved → {path}")
 
 
 # ═══════════════════════════════════════════════════════════════
-#  MAIN
+# MAIN
 # ═══════════════════════════════════════════════════════════════
 
 def parse_args():
@@ -503,51 +484,36 @@ def parse_args():
 
 
 def derive_label(filename: str) -> str:
-    """
-    Dynamicznie przypisuje klasę uwzględniając osobę/komputer,
-    aby porównać ruch Spotify między urządzeniami.
-    """
+    """Dynamicznie mapuje pliki na osoby dla potrzeb analizy porównawczej."""
     filename_lower = filename.lower()
-    
-    # Wykrywanie konkretnych osób w nazwie pliku
     if "kacper" in filename_lower:
         return "spotify_kacper"
     elif "agata" in filename_lower:
         return "spotify_agata"
-    elif "martynka" in filename_lower:
-        return "spotify_martynka"
+    elif "martyna" in filename_lower:
+        return "spotify_martyna"
     
-    # Domyślne zachowanie (jeśli nie dopasowano osoby), np. dla innych aplikacji
     stem = Path(filename).stem
     return stem.split("_")[0].lower()
 
 
 def main():
     args = parse_args()
-
     input_dir  = args.input
     output_dir = args.output
     gran       = args.gran
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── 1. Find PCAP files ──────────────────────────────────────
     pcap_files = sorted(Path(input_dir).glob("*.pcap"))
     if not pcap_files:
         print(f"[!] No .pcap files found in '{input_dir}'")
-        print(f"    Create the folder and place at least 2 .pcap files there.")
         sys.exit(1)
 
     print(f"\n{'='*60}")
-    print(f" PCAP Comparison Analysis")
+    print(f" PCAP Comparison Analysis (INCOMING FOCUS)")
     print(f"{'='*60}")
-    print(f" Input folder : {input_dir}")
-    print(f" Output folder: {output_dir}")
-    print(f" Granularity  : {gran} packets per flow window")
-    print(f" Files found  : {len(pcap_files)}")
-    print(f"{'='*60}\n")
 
-    # ── 2. Extract features from each PCAP ─────────────────────
     all_dfs = []
     for pf in pcap_files:
         label = derive_label(pf.name)
@@ -556,43 +522,33 @@ def main():
             all_dfs.append(df)
 
     if not all_dfs:
-        print("[!] No flow aggregates could be extracted. Check your PCAP files.")
+        print("[!] No flow aggregates could be extracted.")
         sys.exit(1)
 
     df_all = pd.concat(all_dfs, ignore_index=True)
 
+    # 1. Zrównoważenie danych (Undersampling)
     print("\n[*] Balancing dataset to match the smallest class size...")
     min_samples = df_all["label"].value_counts().min()
-    print(f"[*] Smallest class size detected: {min_samples} samples.")
-    
-
     df_all = df_all.groupby("label").sample(n=min_samples, random_state=42).reset_index(drop=True)
-    print(f"[+] Dataset balanced! New total flow aggregates: {len(df_all)} ({min_samples} per class)")
-    # ────────────────────────────────────────────────────────────
+    print(f"[+] Dataset balanced! New size: {len(df_all)} ({min_samples} per class)")
 
-    # Drop metadata columns that aren't features
+    # 2. Filtrowanie cech: Usuwamy 'fwd_' aby analizować tylko ruch PRZYCHODZĄCY (bwd)
     drop_cols = {"label", "actual_packets_in_flow", "agg_mode", "agg_value"}
-    
-    # Zostawiamy tylko cechy zawierające 'bwd' oraz ogólne statystyki transmisji, usuwając 'fwd'
-    feat_cols = [
-        c for c in df_all.columns 
-        if c not in drop_cols 
-        and df_all[c].dtype != object 
-        and not c.startswith("fwd_")  # <--- To blokuje cechy wychodzące!
-    ]
+    feat_cols = [c for c in df_all.columns if c not in drop_cols and df_all[c].dtype != object and not c.startswith("fwd_")]
 
     print(f"\n[*] Total flow aggregates : {len(df_all):,}")
-    print(f"[*] Classes               : {sorted(df_all['label'].unique())}")
-    print(f"[*] Feature count         : {len(feat_cols)}")
+    print(f"[*] Active Classes        : {sorted(df_all['label'].unique())}")
+    print(f"[*] Analysed features     : {len(feat_cols)}")
 
-    # ── 3. Summary statistics ───────────────────────────────────
+    # 3. Obliczanie statystyk opisowych
     print("\n[*] Computing summary statistics...")
     summary_df = compute_summary(df_all, feat_cols)
     summary_path = os.path.join(output_dir, "summary_statistics.csv")
     summary_df.to_csv(summary_path, index=False)
     print(f"[+] Saved → {summary_path}")
 
-    # ── 4. Discrimination scores ────────────────────────────────
+    # 4. Analiza istotności cech (Kruskal-Wallis)
     print("[*] Computing discrimination scores (Kruskal-Wallis)...")
     disc_df = compute_discrimination(df_all, feat_cols)
     disc_path = os.path.join(output_dir, "feature_discrimination.csv")
@@ -601,36 +557,29 @@ def main():
 
     top_feats = disc_df["feature"].tolist()
 
-    # Print top-10 to console
-    print("\n  Top 10 most discriminating features:")
-    print(f"  {'Feature':<32} {'η²':>8}   {'p-value':>10}")
-    print(f"  {'-'*55}")
-    for _, row in disc_df.head(10).iterrows():
-        effect = "●●●" if row["eta2"] >= 0.14 else ("●●" if row["eta2"] >= 0.06 else "●")
-        print(f"  {row['feature']:<32} {row['eta2']:>8.4f}   {row['p_value']:>10.2e}  {effect}")
+    if top_feats:
+        print("\n  Top 10 most discriminating incoming features:")
+        print(f"  {'Feature':<32} {'η²':>8}   {'p-value':>10}")
+        print(f"  {'-'*55}")
+        for _, row in disc_df.head(10).iterrows():
+            effect = "●●●" if row["eta2"] >= 0.14 else ("●" if row["eta2"] >= 0.06 else "•")
+            print(f"  {row['feature']:<32} {row['eta2']:>8.4f}   {row['p_value']:>10.2e}  {effect}")
 
-    # ── 5. Plots ────────────────────────────────────────────────
+    # 5. Generowanie nowoczesnych wykresów
     print("\n[*] Generating visualisations...")
-
     plot_class_distribution(df_all, output_dir)
-    plot_discrimination_bar(disc_df, output_dir)
-    plot_boxplots(df_all, top_feats, output_dir)
-    plot_violins(df_all, top_feats, output_dir)
-    plot_heatmap(df_all, top_feats, output_dir)
+    
+    if not top_feats:
+        print("[!] Brak cech do wygenerowania wykresów porównawczych.")
+    else:
+        plot_discrimination_bar(disc_df, output_dir, top_n=min(20, len(top_feats)))
+        plot_boxplots(df_all, top_feats, output_dir, top_n=min(12, len(top_feats)))
+        plot_violins(df_all, top_feats, output_dir, top_n=min(6, len(top_feats)))
+        plot_heatmap(df_all, top_feats, output_dir, top_n=min(20, len(top_feats)))
+        if len(top_feats) >= 2:
+            plot_pairplot(df_all, top_feats, output_dir, top_n=min(5, len(top_feats)))
 
-    # Pairplot only if we have at least 2 discriminating features
-    if len(top_feats) >= 2:
-        plot_pairplot(df_all, top_feats, output_dir)
-
-    # ── 6. Final summary ────────────────────────────────────────
-    print(f"\n{'='*60}")
-    print(f" Analysis complete!")
-    print(f" All outputs saved to: {output_dir}/")
-    print(f"{'='*60}")
-    print(f"\n  Files generated:")
-    for f in sorted(Path(output_dir).iterdir()):
-        size = f.stat().st_size
-        print(f"    {f.name:<40} {size/1024:6.1f} KB")
+    print(f"\n{'='*60}\n Analysis complete! All outputs in: {output_dir}/\n{'='*60}")
 
 
 if __name__ == "__main__":

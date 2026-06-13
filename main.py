@@ -1,6 +1,8 @@
+from datetime import datetime
 import os
 import time
 import threading
+import torch
 import queue
 import json
 from scapy.all import sniff
@@ -100,7 +102,7 @@ def menu_extract_features_cnn():
         preprocessor.process_pcap(pcap_path, label_idx)
 
     # 4. Save everything into one combined master dataset file
-    output_npz = os.path.join(DATA_CNN_DIR, "cnn_dataset_master.npz")
+    output_npz = os.path.join(DATA_CNN_DIR, f"cnn_dataset_{datetime.now().strftime('%Y-%m-%d')}_master.npz")
     preprocessor.save_dataset(output_npz)
 
 
@@ -142,7 +144,6 @@ def menu_train_models():
         for g, a in sorted(results.items()):
             print(f"Granularity {g:3}: Accuracy {a:.2%}")
         plot_granularity_comparison(results)
-
 
 def menu_train_cnn_models():
     """Option 6: Train CNN models using PyTorch Lightning with raw byte datasets."""

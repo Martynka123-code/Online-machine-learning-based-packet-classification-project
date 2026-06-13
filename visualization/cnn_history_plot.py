@@ -14,7 +14,7 @@ def plot_training_history(csv_path="lightning_logs/version_0/metrics.csv"):
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     # Wyciągnięcie danych (Lightning loguje train/val w różnych wierszach, więc ffill pomaga to połączyć)
-    df_plot = df.fillna(method="ffill").fillna(method="bfill")
+    df_plot = df.ffill().bfill()
 
     # Plot 1: Loss
     if 'train_loss' in df_plot.columns and 'val_loss' in df_plot.columns:
