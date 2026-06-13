@@ -6,3 +6,11 @@ traffic_logs/traffic_2026-03-13.pcap
 __pycache__
 data/cnn_datasets/
 lightning_logs/
+# Ignore large machine learning datasets and logs
+*.npz
+*.csv
+lightning_logs/*.npz
+lightning_logs/
+*.ckpt
+*.ckpt
+*.pcap

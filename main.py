@@ -1,10 +1,17 @@
+from datetime import datetime
 import os
 import time
 import threading
+import torch
 import queue
 import json
 from scapy.all import sniff
 import numpy as np
+
+from pytorch_lightning.loggers import CSVLogger
+from sklearn.metrics import classification_report
+
+from visualization.confusion_matrix_plot import plot_confusion_matrix
 
 # Import configuration and custom modules
 from config import DATA_CNN_DIR, DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
@@ -19,8 +26,6 @@ from torch.utils.data import DataLoader, random_split
 from pytorch_lightning import Trainer
 from models.cnn_trainer import OptimizedPacketCNN, PacketByteDataset
 from visualization.rf_visualizer import plot_granularity_comparison
-from evaluation.batch_evaluator import menu_batch_evaluation
-
 
 
 def menu_collect_data():
@@ -97,7 +102,7 @@ def menu_extract_features_cnn():
         preprocessor.process_pcap(pcap_path, label_idx)
 
     # 4. Save everything into one combined master dataset file
-    output_npz = os.path.join(DATA_CNN_DIR, "cnn_dataset_master.npz")
+    output_npz = os.path.join(DATA_CNN_DIR, f"cnn_dataset_{datetime.now().strftime('%Y-%m-%d')}_master.npz")
     preprocessor.save_dataset(output_npz)
 
 
@@ -140,12 +145,10 @@ def menu_train_models():
             print(f"Granularity {g:3}: Accuracy {a:.2%}")
         plot_granularity_comparison(results)
 
-
 def menu_train_cnn_models():
     """Option 6: Train CNN models using PyTorch Lightning with raw byte datasets."""
     print("\n--- CNN Model Training (PyTorch Lightning) ---")
 
-    # 1. List available .npz datasets in data/processed_csv/
     files = [f for f in os.listdir(DATA_CNN_DIR) if f.endswith('.npz')]
     if not files:
         print(f"[!] No CNN datasets (.npz) found in {DATA_CNN_DIR}. Run CNN feature extraction first.")
@@ -168,8 +171,8 @@ def menu_train_cnn_models():
         val_size = len(full_dataset) - train_size
         train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
 
-        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=0)
-        val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=0)
+        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=0)
+        val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=0)
     except Exception as e:
         print(f"[ERROR] Failed to prepare DataLoaders: {e}")
         return
@@ -389,21 +392,28 @@ def main():
         print(" 5. Train Random Forest Models")
         print(" 6. Train CNN Models (PyTorch Lightning)")
         print(" 7. Run Online Classification (Live) [Random Forest]")
-        print(" 8. Run Online Classification (Live) [CNN]")
-        print(" 9. Offline Batch Evaluation (RF / CNN)")   # <-- NOWE
+        print(" 8. Run Online Classification (Live) [CNN]")  # <--- DODANE
         print(" 0. Exit")
- 
+
         cmd = input("\nSelect option: ").strip()
-        if   cmd == '1': menu_collect_data()
-        elif cmd == '2': menu_extract_features()
-        elif cmd == '3': menu_extract_features_cnn()
-        elif cmd == '4': menu_validate_datasets()
-        elif cmd == '5': menu_train_models()
-        elif cmd == '6': menu_train_cnn_models()
-        elif cmd == '7': menu_online_mode()
-        elif cmd == '8': menu_online_mode_cnn()
-        elif cmd == '9': menu_batch_evaluation()           # <-- NOWE
-        elif cmd == '0': break
+        if cmd == '1':
+            menu_collect_data()
+        elif cmd == '2':
+            menu_extract_features()
+        elif cmd == '3':
+            menu_extract_features_cnn()
+        elif cmd == '4':
+            menu_validate_datasets()
+        elif cmd == '5':
+            menu_train_models()
+        elif cmd == '6':
+            menu_train_cnn_models()
+        elif cmd == '7':
+            menu_online_mode()
+        elif cmd == '8':
+            menu_online_mode_cnn()  # <--- PODPIĘCIE FUNKCJI
+        elif cmd == '0':
+            break
 
 
 if __name__ == "__main__":

@@ -1,10 +1,40 @@
-# models/cnn_trainer.py
 import numpy as np
 import torch
 from torch import nn as nn
 from torch.nn import functional as F
 from torch.utils.data import Dataset
-from pytorch_lightning import LightningModule
+from pytorch_lightning import LightningModule, Callback
+
+
+class MetricsCallback(Callback):
+    """
+    Lightweight callback — collects per-epoch train/val metrics.
+    Pass an instance to Trainer(callbacks=[...]).
+    Access results via .history after training.
+    """
+
+    def __init__(self):
+        self.history = {
+            "train_loss": [],
+            "val_loss": [],
+            "val_acc": [],
+            "val_f1_macro": [],
+        }
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        logged = trainer.callback_metrics
+        if "train_loss" in logged:
+            self.history["train_loss"].append(float(logged["train_loss"]))
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        logged = trainer.callback_metrics
+        if "val_loss" in logged:
+            self.history["val_loss"].append(float(logged["val_loss"]))
+        if "val_acc" in logged:
+            self.history["val_acc"].append(float(logged["val_acc"]))
+        if "val_f1_macro" in logged:
+            self.history["val_f1_macro"].append(float(logged["val_f1_macro"]))
+
 
 class PacketByteDataset(Dataset):
     def __init__(self, npz_path):
@@ -13,22 +43,24 @@ class PacketByteDataset(Dataset):
         self.features = data['features']
         self.labels = data['labels']
         print(f"[+] Loaded {len(self.features)} packets.")
-        
+
     def __len__(self):
         return len(self.features)
-        
+
     def __getitem__(self, idx):
-        # 1D CNN expects shape: [channels, length] -> [1, 1000]
         x = self.features[idx]
-        x = np.expand_dims(x, axis=0) 
-        
+        x = np.expand_dims(x, axis=0)
+
         return {
             "feature": torch.tensor(x, dtype=torch.float32),
             "label": torch.tensor(self.labels[idx], dtype=torch.long)
         }
 
+
 class OptimizedPacketCNN(LightningModule):
-    def __init__(self, output_dim=6, signal_length=1000, learning_rate=0.001):
+    # Udostępniamy parametry w konstruktorze z bezpiecznymi domyślnymi wartościami
+    def __init__(self, output_dim=5, signal_length=1000, learning_rate=0.0049,
+                 conv1_filters = 80, conv2_filters = 40, kernel_size = 2, dropout = 0.17):
         super().__init__()
         self.save_hyperparameters()
         self.learning_rate = learning_rate
@@ -55,12 +87,13 @@ class OptimizedPacketCNN(LightningModule):
 
         # Fully connected layers (Classifier with 0.5 dropout)
         self.fc = nn.Sequential(
-            nn.Linear(in_features=max_pool_out, out_features=128),
+            nn.Linear(in_features=max_pool_out, out_features=25),
+            nn.BatchNorm1d(25),
             nn.ReLU(),
             nn.Dropout(p=0.5),
             nn.Linear(in_features=128, out_features=32),
             nn.ReLU(),
-            nn.Dropout(p=0.5)
+            nn.Dropout(p=dropout)
         )
 
         # Output layer (Logits)
@@ -75,7 +108,7 @@ class OptimizedPacketCNN(LightningModule):
         return x
 
     def training_step(self, batch, batch_idx):
-        x = batch["feature"].float()
+        x = batch["feature"]
         y = batch["label"].long()
         y_hat = self(x)
         loss = F.cross_entropy(y_hat, y)
@@ -83,7 +116,7 @@ class OptimizedPacketCNN(LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        x = batch["feature"].float()
+        x = batch["feature"]
         y = batch["label"].long()
         y_hat = self(x)
         loss = F.cross_entropy(y_hat, y)
@@ -92,6 +125,7 @@ class OptimizedPacketCNN(LightningModule):
 
         self.log("val_loss", loss, prog_bar=True, on_epoch=True)
         self.log("val_acc", acc, prog_bar=True, on_epoch=True)
+        self.log("val_f1_macro", torch.tensor(f1), prog_bar=True, on_epoch=True)
         return loss
 
     def configure_optimizers(self):
