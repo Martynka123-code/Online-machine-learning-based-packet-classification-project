@@ -5,8 +5,8 @@ import pandas as pd
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import (
-    train_test_split,
-    StratifiedKFold,
+    GroupShuffleSplit,  # Zmieniono z train_test_split
+    GroupKFold,         # Zmieniono z StratifiedKFold
     cross_validate,
     RandomizedSearchCV
 )
@@ -76,7 +76,7 @@ class RandomForestTrainer:
                 return None, None, None
 
             drop_cols = [
-                c for c in ["label", "granularity", "agg_mode", "agg_value", "actual_packets_in_flow"]
+                c for c in ["label", "granularity", "agg_mode", "agg_value", "actual_packets_in_flow", "flow_id"]
                 if c in df.columns
             ]
 
@@ -173,15 +173,15 @@ class RandomForestTrainer:
         gran_tag = os.path.splitext(os.path.basename(self.dataset_path))[0]
 
         # --------------------------------------------------
-        # TRAIN / TEST SPLIT (ZROBIONE PRZED SELEKCJĄ CECH!)
-        # --------------------------------------------------
-        X_train, X_test, y_train, y_test = train_test_split(
-            X,
-            y,
-            test_size=0.20,
-            random_state=32,
-            stratify=y
-        )
+        groups = df["flow_id"] if "flow_id" in df.columns else np.arange(len(df))
+
+        gss = GroupShuffleSplit(n_splits=1, test_size=0.20, random_state=32)
+        train_idx, test_idx = next(gss.split(X, y, groups=groups))
+
+        X_train = X.iloc[train_idx].copy()
+        X_test = X.iloc[test_idx].copy()
+        y_train = y.iloc[train_idx].copy()
+        y_test = y.iloc[test_idx].copy()
 
         # --------------------------------------------------
         # FEATURE REDUCTION (TYLKO NA ZBIORZE TRENINGOWYM)
@@ -228,11 +228,7 @@ class RandomForestTrainer:
             "max_features": ["sqrt"]
         }
 
-        cv = StratifiedKFold(
-            n_splits=5,
-            shuffle=True,
-            random_state=32
-        )
+        cv = GroupKFold(n_splits=5)
 
         search = RandomizedSearchCV(
             estimator=rf,
@@ -246,7 +242,9 @@ class RandomForestTrainer:
         )
 
         print("[*] Starting RandomizedSearchCV...")
-        search.fit(X_train_filtered, y_train)
+        # Ważne: przy GroupKFold musimy podać 'groups' do funkcji fit!
+        groups_train = groups.iloc[train_idx]
+        search.fit(X_train_filtered, y_train, groups=groups_train)
 
         self.model = search.best_estimator_
 

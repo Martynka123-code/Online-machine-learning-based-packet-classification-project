@@ -24,6 +24,7 @@ class FlowFeatureExtractorOffline:
         self.agg_value = agg_value
         self.flows = {}
         self.dataset = []
+        self.local_ip = None
 
     # ------------------------------------------------------------------
     # Flow key helpers
@@ -75,20 +76,26 @@ class FlowFeatureExtractorOffline:
     # ------------------------------------------------------------------
 
     def _split_by_direction(self, packets):
-        """Split packets into fwd (initiator→responder) and bwd (responder→initiator)."""
-        if not packets:
-            return [], []
-        first_key = self._get_flow_key(packets[0])
-        if first_key is None:
-            return packets, []
-        initiator_ip = first_key[0]
+        """Split packets into fwd (local→remote) and bwd (remote→local)."""
         fwd, bwd = [], []
         for p in packets:
-            k = self._get_flow_key(p)
-            if k is None:
+            if p.haslayer(IP):
+                src_ip = p[IP].src
+            elif p.haslayer(IPv6):
+                src_ip = p[IPv6].src
+            else:
                 continue
-            (fwd if k[0] == initiator_ip else bwd).append(p)
-        return fwd, bwd
+                
+            # Jeśli pakiet pochodzi od nas (nasze wykryte IP z PCAP), to FWD (Upload)
+            if self.local_ip and src_ip == self.local_ip:
+                fwd.append(p)
+            # Zabezpieczenie (fallback), gdyby IP nie zostało wykryte (najstarsza metoda)
+            elif not self.local_ip and self._get_flow_key(p)[0] == self._get_flow_key(packets[0])[0]:
+                fwd.append(p)
+            else:
+                bwd.append(p)
+                
+        return fwd, bwd 
 
     # ------------------------------------------------------------------
     # TCP helpers
@@ -202,6 +209,14 @@ class FlowFeatureExtractorOffline:
         features["agg_value"] = self.agg_value
         features["label"]     = self.label
 
+        if packets:
+            features["flow_id"] = str(self._get_canonical_key(packets[0]))
+        else:
+            features["flow_id"] = "unknown"
+        # ==========================
+
+        features["label"]     = self.label
+
         return features
 
     # ------------------------------------------------------------------
@@ -210,6 +225,22 @@ class FlowFeatureExtractorOffline:
 
     def process_and_save(self, output_csv, batch_size=10_000):
         print(f"[*] Extracting: {self.pcap_path} | Mode: {self.agg_mode} | Value: {self.agg_value}")
+
+        # === SZYBKI SKAN: ODGADYWANIE LOKALNEGO IP Z PCAP ===
+        ip_counts = {}
+        with PcapReader(self.pcap_path) as reader:
+            for pkt in reader:
+                if pkt.haslayer(IP):
+                    ip_counts[pkt[IP].src] = ip_counts.get(pkt[IP].src, 0) + 1
+                    ip_counts[pkt[IP].dst] = ip_counts.get(pkt[IP].dst, 0) + 1
+                elif pkt.haslayer(IPv6):
+                    ip_counts[pkt[IPv6].src] = ip_counts.get(pkt[IPv6].src, 0) + 1
+                    ip_counts[pkt[IPv6].dst] = ip_counts.get(pkt[IPv6].dst, 0) + 1
+        if ip_counts:
+            # Najczęściej pojawiający się adres w pliku to zazwyczaj adres naszego komputera
+            self.local_ip = max(ip_counts, key=ip_counts.get)
+            print(f"    [+] Auto-detected local IP for this PCAP: {self.local_ip}")
+        # ====================================================
 
         with PcapReader(self.pcap_path) as reader:
             for pkt in reader:
@@ -237,7 +268,7 @@ class FlowFeatureExtractorOffline:
                         self._save_batch(output_csv)
 
         if self.dataset:
-            self._save_batch(output_csv)
+            self._save_batch(output_csv)  
 
     def _save_batch(self, output_csv):
         df = pd.DataFrame(self.dataset).round(5)
