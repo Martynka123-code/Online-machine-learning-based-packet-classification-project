@@ -24,7 +24,7 @@ from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 # Import configuration and custom modules
-from config import DATA_CNN_DIR, DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES
+from config import DATA_CNN_DIR, DATA_RAW_DIR, DATA_CSV_DIR, MODELS_DIR, GRANULARITIES, TIME_WINDOWS
 from models.cnn_online import CNNOnline
 from preprocessing.cnn_preprocessor import CNNPreprocessor
 from sniffing.sniffer_training import SnifferTraining
@@ -51,27 +51,80 @@ def menu_collect_data():
 def menu_extract_features():
     """Option 2: Convert PCAP files to CSV datasets for multiple granularities."""
     print("\n--- Feature Extraction (PCAP to CSV) ---")
-    files = [f for f in os.listdir(DATA_RAW_DIR) if f.endswith('.pcap')]
+    
+    # Przełączamy się na folder ze zbalansowanymi plikami!
+    balanced_dir = os.path.join("data", "balanced_pcaps")
+    if not os.path.exists(balanced_dir):
+        print(f"[!] Folder {balanced_dir} nie istnieje. Najpierw wygeneruj zbalansowane PCAPy (pcap_balancer.py).")
+        return
+
+    files = sorted([f for f in os.listdir(balanced_dir) if f.endswith('.pcap')])
     if not files:
-        print(f"[!] No PCAP files found in {DATA_RAW_DIR}")
+        print(f"[!] Brak plików PCAP w {balanced_dir}")
         return
 
-    print("\nAvailable PCAP files:")
-    for f in files: print(f"  - {f}")
+    print("\nDostępne pliki PCAP w zbalansowanym folderze:")
+    for f in files: 
+        print(f"  - {f}")
 
-    pcap_file = input("\nEnter filename to process: ").strip()
-    label = input("Enter traffic label (e.g., Spotify): ").strip()
-    pcap_path = os.path.join(DATA_RAW_DIR, pcap_file)
+    print("\n[WSKAZÓWKA] Wpisz 'all', aby automatycznie przetworzyć WSZYSTKIE pliki.")
+    user_input = input("Wprowadź nazwę pliku (lub 'all'): ").strip()
 
-    if not os.path.exists(pcap_path):
-        print("[!] File not found.")
+    if user_input.lower() == 'all':
+        print("\n[*] Rozpoczynam automatyczne przetwarzanie wszystkich plików (Tryb ALL)...")
+        
+        # Zabezpieczenie przed powielaniem starych danych
+        confirm = input("Czy wyczyścić stare pliki CSV przed ekstrakcją? (y/n - zalecane 'y'): ").strip().lower()
+        if confirm == 'y':
+            for f in os.listdir(DATA_CSV_DIR):
+                if f.endswith(".csv"):
+                    os.remove(os.path.join(DATA_CSV_DIR, f))
+            print("[+] Stare pliki CSV zostały usunięte. Ekstrakcja na czysto.")
+
+        for f in files:
+            pcap_path = os.path.join(balanced_dir, f)
+            
+            # Automatyczne odgadywanie etykiety (np. "discord_balanced_part1.pcap" -> "Discord")
+            label = f.split('_')[0].capitalize()
+            
+            print(f"\n---> Przetwarzanie pliku: {f} | Wykryta Etykieta: {label}")
+            
+            # 1. Agregacja Pakietowa (Twój stary kod)
+            print(f"  [*] Ekstrakcja dla granularności (pakiety): {GRANULARITIES}")
+            for gran in GRANULARITIES:
+                output_csv = os.path.join(DATA_CSV_DIR, f"rf_dataset_{gran}.csv")
+                extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='packet', agg_value=gran)
+                extractor.process_and_save(output_csv)
+            
+            # 2. Agregacja Czasowa (NOWY KOD)
+            print(f"  [*] Ekstrakcja dla okien czasowych (sekundy): {TIME_WINDOWS}")
+            for tw in TIME_WINDOWS:
+                output_csv_time = os.path.join(DATA_CSV_DIR, f"rf_dataset_time_{tw}.csv")
+                extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='time', agg_value=tw)
+                extractor.process_and_save(output_csv_time)
+        
+        print("\n[+] ZAKOŃCZONO MASOWĄ EKSTRAKCJĘ CECH!")
         return
 
-    print(f"[*] Extracting features for granularities: {GRANULARITIES}")
-    for gran in GRANULARITIES:
-        output_csv = os.path.join(DATA_CSV_DIR, f"rf_dataset_{gran}.csv")
-        extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='packet', agg_value=gran)
-        extractor.process_and_save(output_csv)
+    else:
+        # Klasyczny tryb dla pojedynczego pliku
+        pcap_path = os.path.join(balanced_dir, user_input)
+
+        if not os.path.exists(pcap_path):
+            print("[!] Nie znaleziono pliku.")
+            return
+
+        # Propozycja domyślnej etykiety nawet w trybie ręcznym
+        guessed_label = user_input.split('_')[0].capitalize()
+        label = input(f"Wprowadź etykietę dla ruchu (wciśnij Enter by użyć '{guessed_label}'): ").strip()
+        if not label:
+            label = guessed_label
+
+        print(f"[*] Ekstrakcja cech dla granularności: {GRANULARITIES}")
+        for gran in GRANULARITIES:
+            output_csv = os.path.join(DATA_CSV_DIR, f"rf_dataset_{gran}.csv")
+            extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='packet', agg_value=gran)
+            extractor.process_and_save(output_csv)
 
 
 def menu_extract_features_cnn():
@@ -126,28 +179,47 @@ def menu_validate_datasets():
 
 
 def menu_train_models():
-    """Option 4: Train RF models with advanced analytics and visualization."""
+    """Option 4/5: Train RF models for both Packet and Time granularities."""
     print("\n--- Model Training & Advanced Analytics ---")
-    results = {}
+    results_pkt = {}
+    results_time = {}
 
     for gran in GRANULARITIES:
         csv_path = os.path.join(DATA_CSV_DIR, f"rf_dataset_{gran}.csv")
         if os.path.exists(csv_path):
             print(f"\n>>> Training for Granularity: {gran} packets")
-            # The new RandomForestTrainer will auto-generate plots during train_and_evaluate()
             trainer = RandomForestTrainer(csv_path, reports_dir="reports")
             acc = trainer.train_and_evaluate()
-
-            if acc:
-                results[gran] = acc
+            if acc is not None:
+                results_pkt[gran] = acc  # Zostawiamy czystą liczbę (int)!
                 model_path = os.path.join(MODELS_DIR, f"rf_model_{gran}.pkl")
                 trainer.save_model(model_path)
 
-    if results:
-        print("\n--- Training Summary ---")
-        for g, a in sorted(results.items()):
-            print(f"Granularity {g:3}: Accuracy {a:.2%}")
-        plot_granularity_comparison(results)
+    for tw in TIME_WINDOWS:
+        csv_path = os.path.join(DATA_CSV_DIR, f"rf_dataset_time_{tw}.csv")
+        if os.path.exists(csv_path):
+            print(f"\n>>> Training for Time Window: {tw} seconds")
+            trainer = RandomForestTrainer(csv_path, reports_dir="reports")
+            acc = trainer.train_and_evaluate()
+            if acc is not None:
+                results_time[tw] = acc
+                model_path = os.path.join(MODELS_DIR, f"rf_model_time_{tw}.pkl")
+                trainer.save_model(model_path)
+
+    if results_pkt:
+        print("\n--- Training Summary (Packets) ---")
+        for key, a in results_pkt.items():
+            print(f"Config {key:>3} pkts: Accuracy {a:.2%}")
+        from visualization.rf_visualizer import plot_granularity_comparison
+        try:
+            plot_granularity_comparison(results_pkt)
+        except Exception as e:
+            print(f"[!] Nie udało się narysować wykresu pakietów: {e}")
+            
+    if results_time:
+        print("\n--- Training Summary (Time Windows) ---")
+        for key, a in results_time.items():
+            print(f"Config {key:>3} s: Accuracy {a:.2%}")
 
 def menu_train_cnn_models():
     """Option 6: Train CNN models using PyTorch Lightning with raw byte datasets."""

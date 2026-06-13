@@ -47,7 +47,17 @@ class RandomForestTrainer:
         print(f"[*] Loading data from {self.dataset_path}...")
         try:
             df = pd.read_csv(self.dataset_path)
-            df = self._filter_invalid_rows(df)
+            
+            initial_len = len(df)
+            
+            df = df.replace([np.inf, -np.inf], 0)
+            
+            # Wypełnia wszystkie braki (NaN) zerami
+            df = df.fillna(0)
+            
+            print(f"[*] Data imputation complete. Kept all {len(df)} rows (no data lost!).")
+            # -----------------------------------------------
+
             if df.empty:
                 print("[!] Dataset is empty.")
                 return None, None, None
@@ -121,7 +131,6 @@ class RandomForestTrainer:
             print("[✓] All features show variance.")
 
         return variances
-
     def train_and_evaluate(self):
         X, y, df = self._load_data()
         if X is None:
@@ -129,26 +138,53 @@ class RandomForestTrainer:
 
         gran_tag = os.path.splitext(os.path.basename(self.dataset_path))[0]
 
-        # POPRAWKA: grupowanie po session_id (plik pcap) jeśli istnieje,
-        # w przeciwnym razie po flow_id — żeby model nie uczył się konkretnych sesji
+        # -------------------------------------------------------------
+        # ETAP 1: PODZIAŁ NA ZBIÓR TRENINGOWY I TESTOWY
+        # -------------------------------------------------------------
         if "session_id" in df.columns:
             groups = df["session_id"]
-            print("[*] Grouping by session_id (pcap file) — poprawny podział train/test")
+            files_per_class = df.groupby("label")["session_id"].nunique()
+            min_files = files_per_class.min()
+            
+            if min_files < 2:
+                print(f"\n[!] UWAGA: Za mało unikalnych plików PCAP na klasę!")
+                print(f"[!] Masz tylko: {files_per_class.to_dict()}")
+                print("[!] Przełączam podział na StratifiedShuffleSplit (możliwy wyciek danych!).")
+                
+                from sklearn.model_selection import StratifiedShuffleSplit
+                sss = StratifiedShuffleSplit(n_splits=1, test_size=0.20, random_state=32)
+                train_idx, test_idx = next(sss.split(X, y))
+            else:
+                from sklearn.model_selection import StratifiedGroupKFold
+                print("[*] Grouping by session_id with StratifiedGroupKFold — IDEALNY BALANS TESTU!")
+                # Bierzemy 1 z 3 plików z każdej klasy do testu
+                sgkf = StratifiedGroupKFold(n_splits=3, shuffle=True, random_state=42)
+                train_idx, test_idx = next(sgkf.split(X, y, groups=groups))
+                
         elif "flow_id" in df.columns:
             groups = df["flow_id"]
             print("[!] Brak session_id — grupowanie po flow_id (gorsze, ryzyko data leakage)")
+            from sklearn.model_selection import GroupShuffleSplit
+            gss = GroupShuffleSplit(n_splits=1, test_size=0.20, random_state=32)
+            train_idx, test_idx = next(gss.split(X, y, groups=groups))
+            
         else:
             groups = np.arange(len(df))
             print("[!] Brak session_id i flow_id — podział losowy (najgorszy)")
+            from sklearn.model_selection import ShuffleSplit
+            ss = ShuffleSplit(n_splits=1, test_size=0.20, random_state=32)
+            train_idx, test_idx = next(ss.split(X, y))
 
-        gss = GroupShuffleSplit(n_splits=1, test_size=0.20, random_state=32)
-        train_idx, test_idx = next(gss.split(X, y, groups=groups))
+        # (Usunięto stare nadpisujące gss.split stąd)
 
         X_train = X.iloc[train_idx].copy()
         X_test  = X.iloc[test_idx].copy()
         y_train = y.iloc[train_idx].copy()
         y_test  = y.iloc[test_idx].copy()
 
+        # -------------------------------------------------------------
+        # ETAP 2: PRZYGOTOWANIE CECH I MODELU
+        # -------------------------------------------------------------
         X_train_unfiltered = X_train.copy()
 
         X_train_filtered, dropped_features = self._drop_correlated_features(
@@ -180,7 +216,23 @@ class RandomForestTrainer:
             "max_samples": [0.6, 0.8]
         }
 
-        cv = GroupKFold(n_splits=5)
+        # -------------------------------------------------------------
+        # ETAP 3: WALIDACJA WEWNĘTRZNA (HYPERPARAMETER TUNING)
+        # -------------------------------------------------------------
+        groups_train = groups.iloc[train_idx] if hasattr(groups, 'iloc') else groups[train_idx]
+        n_groups_train = groups_train.nunique() if hasattr(groups_train, 'nunique') else len(np.unique(groups_train))
+
+        # Tutaj również dodajemy StratifiedGroupKFold dla perfekcyjnego CV wewnątrz szukania
+        n_splits = min(5, n_groups_train)
+
+        if n_splits < 2:
+            print("[!] UWAGA: Mniej niż 2 pliki PCAP w zbiorze treningowym! Używam StratifiedKFold.")
+            from sklearn.model_selection import StratifiedKFold
+            cv = StratifiedKFold(n_splits=3)
+        else:
+            from sklearn.model_selection import StratifiedGroupKFold
+            # Zapewnia równy dobór klas podczas każdej iteracji uczenia:
+            cv = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=42)
 
         search = RandomizedSearchCV(
             estimator=rf,
@@ -193,8 +245,7 @@ class RandomForestTrainer:
             random_state=32
         )
 
-        print("[*] Starting RandomizedSearchCV...")
-        groups_train = groups.iloc[train_idx] if hasattr(groups, 'iloc') else groups[train_idx]
+        print(f"[*] Starting RandomizedSearchCV (n_splits={n_splits}, n_groups_train={n_groups_train})...")
         search.fit(X_train_filtered, y_train, groups=groups_train)
 
         self.model = search.best_estimator_
@@ -203,6 +254,9 @@ class RandomForestTrainer:
         print(search.best_params_)
         print(f"[+] Best CV score (from Search): {search.best_score_:.4f}")
 
+        # -------------------------------------------------------------
+        # ETAP 4: WYNIKI I WYKRESY
+        # -------------------------------------------------------------
         preds = self.model.predict(X_test_filtered)
         acc = accuracy_score(y_test, preds)
 
