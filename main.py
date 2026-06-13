@@ -11,6 +11,7 @@ import numpy as np
 from pytorch_lightning.loggers import CSVLogger
 from sklearn.metrics import classification_report
 
+from pytorch_lightning.callbacks import LearningRateMonitor
 from visualization.confusion_matrix_plot import plot_confusion_matrix
 from models.cnn_trainer import OptimizedPacketCNN, PacketByteDataset, MetricsCallback
 from visualization.cnn_visualizer import (
@@ -270,7 +271,7 @@ def menu_train_cnn_models():
         accelerator="auto",
         devices=1,
         logger=csv_logger,
-        callbacks=[metrics_cb],
+        callbacks=[metrics_cb, LearningRateMonitor(logging_interval='epoch')],
     )
 
     try:

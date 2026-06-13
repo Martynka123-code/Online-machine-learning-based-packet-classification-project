@@ -200,7 +200,6 @@ class OptimizedPacketCNN(LightningModule):
             mode="min",
             factor=0.5,
             patience=3,
-            verbose=True,
         )
         return {
             "optimizer": optimizer,
