@@ -1,31 +1,38 @@
-# preprocessing/feature_extractor.py
 import os
 import numpy as np
 import pandas as pd
 from scapy.all import rdpcap
 from scapy.layers.inet import IP, TCP, UDP
+from scapy.layers.inet6 import IPv6
+from scapy.utils import PcapReader
 import warnings
 
-warnings.filterwarnings('ignore')  # Suppress Scapy's warnings
+warnings.filterwarnings('ignore')
 
 class FlowFeatureExtractor:
-    def __init__(self, pcap_path=None, label=None, granularity=100):
+    def __init__(self, pcap_path=None, label=None, agg_mode="packet", agg_value=100):
         """
-        pcap_path: Path to the .pcap file (None for Online mode)
-        label: Traffic class label (None for Online mode)
+        agg_mode: "packet" (aggregate by packet count) or "time" (aggregate by time in seconds)
+        agg_value: threshold for the chosen mode (e.g., 50 packets or 1.5 seconds)
         """
         self.pcap_path = pcap_path
         self.label = label
-        self.granularity = granularity
+        self.agg_mode = agg_mode
+        self.agg_value = agg_value
         self.flows = {}
         self.dataset = []
 
     def _get_flow_key(self, packet):
-        """Returns a direction-agnostic 5-tuple flow key (src_ip, dst_ip, src_port, dst_port, proto).
-        Sorting IPs and ports ensures the same key regardless of packet direction."""
-        if not packet.haslayer(IP): return None
-        ip_layer = packet[IP]
-        proto = ip_layer.proto
+        """Returns a direction-agnostic 5-tuple flow key. Supports IPv4 & IPv6."""
+        if packet.haslayer(IP):
+            ip_layer = packet[IP]
+            proto = ip_layer.proto
+        elif packet.haslayer(IPv6):
+            ip_layer = packet[IPv6]
+            proto = ip_layer.nh
+        else:
+            return None
+
         if packet.haslayer(TCP):
             sport, dport = packet[TCP].sport, packet[TCP].dport
         elif packet.haslayer(UDP):
@@ -38,7 +45,6 @@ class FlowFeatureExtractor:
         return (ips[0], ips[1], ports[0], ports[1], proto)
 
     def _get_payload_length(self, packet):
-        """Returns the payload length in bytes."""
         if packet.haslayer(TCP) and packet[TCP].payload:
             return len(packet[TCP].payload)
         elif packet.haslayer(UDP) and packet[UDP].payload:
@@ -46,8 +52,6 @@ class FlowFeatureExtractor:
         return 0
 
     def _calculate_features(self, packets):
-        """Computes statistical features from a fixed-size packet window.
-        IP and MAC addresses are not included to keep the feature set anonymous."""
         pkt_lengths = [len(p) for p in packets]
         payload_lengths = [self._get_payload_length(p) for p in packets]
         iats = [float(packets[i].time - packets[i - 1].time) for i in range(1, len(packets))]
@@ -55,60 +59,66 @@ class FlowFeatureExtractor:
 
         iat_mean = np.mean(iats)
         iat_std = np.std(iats)
-        iat_cov = (iat_std / iat_mean) if iat_mean > 0 else 0.0
 
         features = {
             "pkt_len_max": np.max(pkt_lengths),
             "pkt_len_std": np.std(pkt_lengths),
             "pkt_len_p50": np.percentile(pkt_lengths, 50),
-            "pkt_len_p75": np.percentile(pkt_lengths, 75),
             "payload_median": np.median(payload_lengths),
             "iat_std": iat_std,
-            "iat_p75_minus_p50": np.percentile(iats, 75) - np.median(iats),
-            "iat_p95_minus_p50": np.percentile(iats, 95) - np.median(iats),
-            "iat_cov_std_mean": iat_cov,
             "iat_median": np.median(iats),
-            "granularity": self.granularity
+            "agg_mode": self.agg_mode,
+            "agg_value": self.agg_value,
+            "actual_packets_in_flow": len(packets)
         }
         
-        # Add label only if we are in training/extraction mode
         if self.label is not None:
             features["label"] = self.label
             
         return features
 
     def process_and_save(self, output_csv, batch_size=10000):
-        """Extracts features from a pcap file and appends results to a csv file using batches to save RAM."""
         if self.pcap_path is None:
             print("[!] Error: No PCAP path provided. This method is for offline extraction.")
             return
 
-        print(f"[*] Extracting features from: {self.pcap_path} | Granularity: {self.granularity}")
-        packets = rdpcap(self.pcap_path)
+        print(f"[*] Extracting: {self.pcap_path} | Mode: {self.agg_mode} | Value: {self.agg_value}")
+        
+        with PcapReader(self.pcap_path) as packets:
+            for pkt in packets:
+                flow_key = self._get_flow_key(pkt)
+                if not flow_key: continue
 
-        for pkt in packets:
-            flow_key = self._get_flow_key(pkt)
-            if not flow_key: continue
+                if flow_key not in self.flows: 
+                    self.flows[flow_key] = []
+                    
+                self.flows[flow_key].append(pkt)
+                flow_packets = self.flows[flow_key]
 
-            if flow_key not in self.flows: self.flows[flow_key] = []
-            self.flows[flow_key].append(pkt)
+                flush_flow = False
 
-            if len(self.flows[flow_key]) == self.granularity:
-                self.dataset.append(self._calculate_features(self.flows[flow_key]))
-                self.flows[flow_key] = []  
+                if self.agg_mode == "packet":
+                    if len(flow_packets) >= self.agg_value:
+                        flush_flow = True
+                
+                elif self.agg_mode == "time":
+                    time_diff = float(flow_packets[-1].time - flow_packets[0].time)
+                    if time_diff >= self.agg_value:
+                        flush_flow = True
 
-                if len(self.dataset) >= batch_size:
-                    self._save_batch(output_csv)
+                if flush_flow:
+                    self.dataset.append(self._calculate_features(flow_packets))
+                    self.flows[flow_key] = []  
+
+                    if len(self.dataset) >= batch_size:
+                        self._save_batch(output_csv)
 
         if self.dataset:
             self._save_batch(output_csv)
-        else:
-            print("[!] Not enough packets to create a single aggregate.")
 
     def _save_batch(self, output_csv):
-        """Helper function to save a batch and clear memory."""
         df = pd.DataFrame(self.dataset).round(5)
         file_exists = os.path.isfile(output_csv)
         df.to_csv(output_csv, mode='a', header=not file_exists, index=False)
         print(f"[+] Saved batch of {len(self.dataset)} aggregates to {output_csv}")
-        self.dataset.clear()  
+        self.dataset.clear()

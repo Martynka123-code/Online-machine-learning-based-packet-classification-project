@@ -1,20 +1,25 @@
-# === Narzędzia sieciowe i systemowe ===
-scapy>=2.5.0          # Główny sniffer, parser plików .pcap i warstw sieciowych
-psutil>=5.9.0         # Mapowanie portów na procesy (Host-based labeling)
+# === Network & System Tools ===
+scapy>=2.5.0          # Main sniffer, .pcap parser, and network layer manipulation
+psutil>=5.9.0         # Port-to-process mapping (Host-based labeling)
 
-# === Przetwarzanie danych (Preprocessing) ===
-pandas>=2.0.0         # Manipulacja danymi tabelarycznymi i zapis do .csv
-numpy>=1.24.0         # Zaawansowana matematyka (percentyle, mediany, odchylenia)
+# === Data Processing (Preprocessing) ===
+pandas>=2.0.0         # Tabular data manipulation and .csv export
+numpy>=1.24.0         # Advanced math operations (percentiles, medians, deviations)
 
-# === Klasyczne Uczenie Maszynowe (Random Forest) ===
-scikit-learn>=1.3.0   # Implementacja Random Forest, metryki, podział zbiorów
-joblib>=1.3.0         # Zapisywanie i wczytywanie wytrenowanych modeli na dysk
+# === Classical Machine Learning (Random Forest) ===
+scikit-learn>=1.3.0   # Random Forest implementation, metrics, dataset splitting
+joblib>=1.3.0         # Saving and loading trained models to/from disk
 
-# === [Na przyszłość] Głębokie uczenie (CNN) ===
-# torch>=2.0.0        # PyTorch - Odkomentować, gdy zaczniecie robić sieci neuronowe
-# torchvision>=0.15.0 # Pomocnicze funkcje wizyjne dla PyTorcha
+# === Deep Learning (CNN) ===
+torch>=2.0.0          # PyTorch core library for neural networks
+pytorch-lightning>=2.0.0 # PyTorch Lightning for training loop automation
+# torchvision>=0.15.0 # Vision helpers for PyTorch (uncomment if image transformations are needed)
 
-# === [Na przyszłość] Interfejs Graficzny ===
-# PyQt5>=5.15.0       # Jeśli zdecydujecie się na GUI w Qt
-matplotlib>=3.7.0     # Wykresy porównawcze (opcjonalnie, można też użyć Plotly lub Seaborn)
-seaborn>=0.12.0     # Estetyczne wykresy (opcjonalnie, można też użyć Plotly lub Matplotlib)
+# === Visualization & GUI ===
+# PyQt5>=5.15.0       # Uncomment if you decide to build a GUI in Qt
+matplotlib>=3.7.0     # Comparative plots and basic charts
+seaborn>=0.12.0       # Aesthetic plots (e.g., Confusion Matrix)p
+
+# ISSUES:
+# If you encounter Windows Long Path issues, try this in Powershell as admin:
+# New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
