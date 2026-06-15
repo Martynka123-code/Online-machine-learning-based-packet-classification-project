@@ -7,7 +7,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import EarlyStopping
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 
-from models.cnn_trainer import OptimizedPacketCNN, PacketByteDataset
+from cnn_trainer import OptimizedPacketCNN, PacketByteDataset
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -38,6 +38,10 @@ space = {
 }
 
 full_dataset = PacketByteDataset(DATASET_PATH)
+
+num_classes = len(set(full_dataset.labels))
+print(f"[*] Wykryto klas (output_dim): {num_classes}")
+
 train_size = int(0.8 * len(full_dataset))
 val_size   = len(full_dataset) - train_size
 train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
@@ -48,10 +52,11 @@ def objective(params):
     print(f"[>] Configuration testing:\n{params}")
     print(f"{'='*50}")
 
-    train_loader = DataLoader(train_dataset, batch_size=params['batch_size'], shuffle=True,  num_workers=0)
+    train_loader = DataLoader(train_dataset, batch_size=params['batch_size'], shuffle=True,  num_workers=0, drop_last=True)
     val_loader   = DataLoader(val_dataset,   batch_size=params['batch_size'], shuffle=False, num_workers=0)
 
     model = OptimizedPacketCNN(
+        output_dim=num_classes,
         learning_rate=params['learning_rate'],
         dropout=params['dropout'],
         conv1_filters=params['conv_filters']['c1'],
@@ -85,7 +90,7 @@ if __name__ == "__main__":
         fn=objective,
         space=space,
         algo=tpe.suggest,
-        max_evals=8,
+        max_evals=80,
         trials=trials
     )
 

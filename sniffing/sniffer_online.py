@@ -117,16 +117,24 @@ class SnifferOnline:
     # MODE "raw" - per-pakiet (CNN)
     # ------------------------------------------------------------------
     def _raw_packet_worker(self):
-        print("[*] Online Worker started (raw per-packet mode).")
+        print("[*] Online Worker started (raw per-packet mode with BATCHING).")
+        batch = []
+        batch_size = 32 # Ilość pakietów paczkowanych do jednej operacji (zwiększa FPS wielokrotnie)
+        
         while not self.stop_sniffing:
             try:
-                packet = self.packet_queue.get(timeout=1.0)
-                if packet is None:
-                    continue
-                self.packet_callback(packet)
+                # Pobieramy bardzo szybko
+                packet = self.packet_queue.get(timeout=0.05)
+                if packet is not None:
+                    batch.append(packet)
                 self.packet_queue.task_done()
             except queue.Empty:
-                continue
+                pass
+            
+            # Puszczamy inferencję gdy: uzbieraliśmy pełny batch ALBO kolejka jest pusta a mamy coś w buforze
+            if len(batch) >= batch_size or (len(batch) > 0 and self.packet_queue.empty()):
+                self.packet_callback(batch)  # <--- UWAGA: Wysyłamy teraz LISTĘ pakietów do dashboardu!
+                batch = []
 
     # ------------------------------------------------------------------
     # MODE "flow" - agregacja przepływów (RF)

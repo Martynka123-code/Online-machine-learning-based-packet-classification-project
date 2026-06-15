@@ -139,6 +139,7 @@ def menu_extract_features_cnn():
         json.dump(class_map, f, indent=4)
     print(f"[+] Class mapping dictionary saved to: {map_path}")
 
+    # Inicjalizujemy preprocesor RAZ, bo chcemy mieć jeden wspólny zbiór (self.data)
     preprocessor = CNNPreprocessor(max_length=1000)
     print("\n[*] Processing PCAP files into a combined memory array...")
 
@@ -146,11 +147,19 @@ def menu_extract_features_cnn():
         app_name = os.path.splitext(f)[0].split('_')[0]
         label_idx = class_map[app_name]
         pcap_path = os.path.join(DATA_RAW_DIR, f)
+        
+        # 1. Wykrywamy lokalne IP konkretnie dla TEGO pliku PCAP
+        local_ips = FlowFeatureExtractor(pcap_path=pcap_path)._detect_local_ips_from_pcap(pcap_path)
+
+        # 2. AKTUALIZACJA: Podajemy preprocesorowi nowe IP przed procesowaniem!
+        # Dzięki temu kodowanie kierunku w CNNPreprocessor wie, kto jest "klientem" w tym konkretnym PCAPie
+        preprocessor.local_ips = local_ips
+
+        # 3. Ekstrakcja z użyciem w/w adresów IP
         preprocessor.process_pcap(pcap_path, label_idx)
 
     output_npz = os.path.join(DATA_CNN_DIR, f"cnn_dataset_{datetime.now().strftime('%Y-%m-%d')}_master.npz")
     preprocessor.save_dataset(output_npz)
-
 
 def menu_validate_datasets():
     """Option 4: Quality check for generated CSV datasets."""
