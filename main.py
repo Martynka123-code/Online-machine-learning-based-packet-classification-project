@@ -70,6 +70,42 @@ def menu_extract_features():
     print("\n[WSKAZÓWKA] Wpisz 'all', aby automatycznie przetworzyć WSZYSTKIE pliki.")
     user_input = input("Wprowadź nazwę pliku (lub 'all'): ").strip()
 
+    # --- NOWE: Wybór parametrów agregacji ---
+    print("\n--- Wybór parametrów agregacji ---")
+    print(f"Domyślne granularności (pakiety): {GRANULARITIES}")
+    print(f"Domyślne okna czasowe (sekundy): {TIME_WINDOWS}")
+
+    # Obsługa granularności (pakiety)
+    user_gran = input("Podaj granularności oddzielone przecinkiem (Enter = domyślne, 'none' = pomiń): ").strip()
+    selected_gran = []
+    if user_gran.lower() != 'none':
+        if user_gran:
+            try:
+                selected_gran = [int(x.strip()) for x in user_gran.split(',')]
+            except ValueError:
+                print("[!] Błąd formatu. Używam domyślnych wartości.")
+                selected_gran = GRANULARITIES
+        else:
+            selected_gran = GRANULARITIES
+
+    # Obsługa okien czasowych (sekundy)
+    user_time = input("Podaj okna czasowe oddzielone przecinkiem (Enter = domyślne, 'none' = pomiń): ").strip()
+    selected_time = []
+    if user_time.lower() != 'none':
+        if user_time:
+            try:
+                selected_time = [float(x.strip()) for x in user_time.split(',')]
+            except ValueError:
+                print("[!] Błąd formatu. Używam domyślnych wartości.")
+                selected_time = TIME_WINDOWS
+        else:
+            selected_time = TIME_WINDOWS
+
+    if not selected_gran and not selected_time:
+        print("[!] Nie wybrano żadnych parametrów agregacji. Anulowanie.")
+        return
+    # ----------------------------------------
+
     if user_input.lower() == 'all':
         print("\n[*] Rozpoczynam automatyczne przetwarzanie wszystkich plików (Tryb ALL)...")
 
@@ -85,19 +121,22 @@ def menu_extract_features():
             label = f.split('_')[0].capitalize()
             print(f"\n---> Przetwarzanie pliku: {f} | Wykryta Etykieta: {label}")
 
-            print(f"  [*] Ekstrakcja dla granularności (pakiety): {GRANULARITIES}")
-            for gran in GRANULARITIES:
-                output_csv = os.path.join(DATA_CSV_DIR, f"rf_dataset_{gran}.csv")
-                extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='packet', agg_value=gran)
-                extractor.process_and_save(output_csv)
+            if selected_gran:
+                print(f"  [*] Ekstrakcja dla granularności (pakiety): {selected_gran}")
+                for gran in selected_gran:
+                    output_csv = os.path.join(DATA_CSV_DIR, f"rf_dataset_{gran}.csv")
+                    extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='packet',
+                                                     agg_value=gran)
+                    extractor.process_and_save(output_csv)
 
-            print(f"  [*] Ekstrakcja dla okien czasowych (sekundy): {TIME_WINDOWS}")
-            for tw in TIME_WINDOWS:
-                output_csv_time = os.path.join(DATA_CSV_DIR, f"rf_dataset_time_{tw}.csv")
-                extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='time', agg_value=tw)
-                extractor.process_and_save(output_csv_time)
+            if selected_time:
+                print(f"  [*] Ekstrakcja dla okien czasowych (sekundy): {selected_time}")
+                for tw in selected_time:
+                    output_csv_time = os.path.join(DATA_CSV_DIR, f"rf_dataset_time_{tw}.csv")
+                    extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='time', agg_value=tw)
+                    extractor.process_and_save(output_csv_time)
 
-        print("\n[+] ZAKOŃCZONO MASOWĄ EKSTRAKCJĄ CECH!")
+        print("\n[+] ZAKOŃCZONO MASOWĄ EKSTRAKCJĘ CECH!")
         return
 
     else:
@@ -111,12 +150,21 @@ def menu_extract_features():
         if not label:
             label = guessed_label
 
-        print(f"[*] Ekstrakcja cech dla granularności: {GRANULARITIES}")
-        for gran in GRANULARITIES:
-            output_csv = os.path.join(DATA_CSV_DIR, f"rf_dataset_{gran}.csv")
-            extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='packet', agg_value=gran)
-            extractor.process_and_save(output_csv)
+        if selected_gran:
+            print(f"[*] Ekstrakcja cech dla granularności (pakiety): {selected_gran}")
+            for gran in selected_gran:
+                output_csv = os.path.join(DATA_CSV_DIR, f"rf_dataset_{gran}.csv")
+                extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='packet', agg_value=gran)
+                extractor.process_and_save(output_csv)
 
+        if selected_time:
+            print(f"[*] Ekstrakcja cech dla okien czasowych (sekundy): {selected_time}")
+            for tw in selected_time:
+                output_csv_time = os.path.join(DATA_CSV_DIR, f"rf_dataset_time_{tw}.csv")
+                extractor = FlowFeatureExtractor(pcap_path=pcap_path, label=label, agg_mode='time', agg_value=tw)
+                extractor.process_and_save(output_csv_time)
+
+        print("\n[+] ZAKOŃCZONO EKSTRAKCJĘ CECH!")
 
 def menu_extract_features_cnn():
     """Option 3: Convert ALL available PCAP files into a single master NPZ dataset for CNN."""
