@@ -424,24 +424,33 @@ def menu_online_mode_cnn():
     from scapy.layers.inet import IP, TCP, UDP
     from scapy.layers.inet6 import IPv6
 
-    def on_packet(packet):
-        app_name, confidence = classifier.predict_packet(packet)
-        if app_name is None:
-            return
+    def on_packet(batch):
+        # Zabezpieczenie: jeśli dostaniemy pojedynczy pakiet, zamieniamy go w listę
+        if not isinstance(batch, list):
+            batch = [batch]
 
-        proto = "TCP" if packet.haslayer(TCP) else "UDP"
-        sport = packet[TCP].sport if packet.haslayer(TCP) else packet[UDP].sport
-        dport = packet[TCP].dport if packet.haslayer(TCP) else packet[UDP].dport
+        # Przetwarzamy każdy pakiet z listy (batcha) osobno
+        for packet in batch:
+            app_name, confidence = classifier.predict_packet(packet)
 
-        if packet.haslayer(IP):
-            src, dst = packet[IP].src, packet[IP].dst
-        elif packet.haslayer(IPv6):
-            src, dst = packet[IPv6].src, packet[IPv6].dst
-        else:
-            src, dst = "unknown", "unknown"
+            # Jeśli model z jakiegoś powodu nie zwrócił predykcji, pomiń ten pakiet
+            if app_name is None:
+                continue
 
-        print(f"[LIVE-CNN] {src}:{sport} -> {dst}:{dport} ({proto}) | App: {app_name.upper()} ({confidence * 100:.1f}%)")
-        dashboard.push(app_name, confidence, meta=f"{src}:{sport} -> {dst}:{dport} ({proto})")
+            proto = "TCP" if packet.haslayer(TCP) else "UDP"
+            sport = packet[TCP].sport if packet.haslayer(TCP) else packet[UDP].sport
+            dport = packet[TCP].dport if packet.haslayer(TCP) else packet[UDP].dport
+
+            if packet.haslayer(IP):
+                src, dst = packet[IP].src, packet[IP].dst
+            elif packet.haslayer(IPv6):
+                src, dst = packet[IPv6].src, packet[IPv6].dst
+            else:
+                src, dst = "unknown", "unknown"
+
+            print(
+                f"[LIVE-CNN] {src}:{sport} -> {dst}:{dport} ({proto}) | App: {app_name.upper()} ({confidence * 100:.1f}%)")
+            dashboard.push(app_name, confidence, meta=f"{src}:{sport} -> {dst}:{dport} ({proto})")
 
     sniffer = SnifferOnline(mode="raw", packet_callback=on_packet)
 

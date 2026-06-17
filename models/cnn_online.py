@@ -3,6 +3,8 @@ import torch
 import numpy as np
 from models.cnn_trainer import OptimizedPacketCNN
 from preprocessing.cnn_preprocessor import CNNPreprocessor
+from preprocessing.feature_extractor import FlowFeatureExtractor
+from preprocessing.cnn_preprocessor import is_noise_packet
 from scapy.layers.inet import TCP, UDP
 
 class CNNOnline:

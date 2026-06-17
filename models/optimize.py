@@ -31,10 +31,11 @@ space = {
         {'c1': 48,  'c2': 24},
         {'c1': 64,  'c2': 32},
         {'c1': 80,  'c2': 40},
-        {'c1': 100, 'c2': 50}
+        {'c1': 100, 'c2': 50},
+        {'c1': 128, 'c2': 64}
     ]),
-    'kernel_size': hp.choice('kernel_size', [2, 3, 5, 7, 9]),
-    'batch_size':  hp.choice('batch_size',  [16, 32, 64, 128, 256, 512])
+    'kernel_size': hp.choice('kernel_size', [2, 3, 5, 7, 9, 15]),
+    'batch_size':  hp.choice('batch_size',  [16, 32, 64, 128, 256])
 }
 
 full_dataset = PacketByteDataset(DATASET_PATH)
