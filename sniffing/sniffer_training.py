@@ -59,7 +59,7 @@ class SnifferTraining:
             
             with self.lock:
                 self.port_map = temp_map
-            time.sleep(1)
+            time.sleep(0.1)
 
     def _get_flow_key(self, si, di, sp, dp, pr):
         a, b = (si, sp), (di, dp)
@@ -107,7 +107,13 @@ class SnifferTraining:
 
     def _save_raw_pcap(self, app, packet):
         date_str = datetime.now().strftime("%Y-%m-%d")
-        path = os.path.join(DATA_RAW_DIR, f"{app}_{date_str}.pcap")
+        
+        # Wyciągamy dowolny adres z self.local_ips jako główny adres nagrywającego
+        local_ip = list(self.local_ips)[0] if self.local_ips else "unknown"
+        
+        # Zapisujemy IP w nazwie pliku!
+        file_name = f"{app}_{local_ip}_{date_str}.pcap"
+        path = os.path.join(DATA_RAW_DIR, file_name)
         
         with self.lock:
             if app not in self.writers:
