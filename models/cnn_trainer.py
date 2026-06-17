@@ -71,11 +71,11 @@ class OptimizedPacketCNN(LightningModule):
         self,
         output_dim: int = 5,
         signal_length: int = 1000,
-        learning_rate: float = 0.0049,
-        conv1_filters: int = 80,
-        conv2_filters: int = 40,
-        kernel_size: int = 2,
-        dropout: float = 0.17,
+        learning_rate: float = 0.0007478604002657379,
+        conv1_filters: int = 64,
+        conv2_filters: int = 32,
+        kernel_size: int = 4,
+        dropout: float = 0.4895229008693801,
     ):
         super().__init__()
         # Zapisuje WSZYSTKIE parametry — konieczne dla load_from_checkpoint

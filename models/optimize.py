@@ -90,7 +90,7 @@ if __name__ == "__main__":
         fn=objective,
         space=space,
         algo=tpe.suggest,
-        max_evals=80,
+        max_evals=20,
         trials=trials
     )
 
